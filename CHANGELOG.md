@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0 - 2026-11-15
+
+- Interactive menu when run without action parameters: recommended / full / klein / custom install,
+  dry run, cleanup, uninstall. Confirmations before downloading, restarting ComfyUI, installing
+  Creative Cloud.
+- Custom preset picker (`-Presets` or the menu) with live download size; restricted licences need
+  typing ACCEPT.
+- `-Cleanup`: download cache, partial files, orphan markers, old logs, test images, leftovers;
+  interactive review of installed models.
+- `-Uninstall`: removes the plugin, stops ComfyUI, deletes the install folder.
+- `-Yes` and `-NonInteractive` for unattended runs.
+- Fix: Int32 overflow computing missing bytes on Windows PowerShell 5.1; 15.9 GB cards count as 16 GB.
+
 ## 0.9.0 - 2026-11-15
 
 First public release (beta).

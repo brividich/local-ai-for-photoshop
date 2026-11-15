@@ -34,6 +34,21 @@
         "tight" in the GPU advisor), with the models and custom nodes they need.
   Full  every model without a restricted licence (~126 GB), whatever the GPU.
   Klein only the FLUX.2 [klein] 4B stack (~12.5 GB, Apache-2.0) and the nodes its presets need.
+  Custom the presets passed with -Presets (or picked in the interactive menu).
+  Run the script with no parameters in a console to get a menu instead.
+.PARAMETER Presets
+  Install exactly these OpenLayer preset ids (implies -ModelSet Custom), e.g.
+  -Presets txt2img-z-image-turbo,upscale-seedvr2-3b. Ids are listed in the report and the manifest.
+.PARAMETER Cleanup
+  Remove download caches, partial downloads, old logs, test images and leftovers. In the
+  interactive menu you can also review installed models and delete the ones you no longer want.
+.PARAMETER Uninstall
+  Remove the OpenLayer plugin, stop ComfyUI and delete the install folder (asks to type UNINSTALL;
+  without a console it needs -Yes).
+.PARAMETER Yes
+  Answer yes to every confirmation (unattended runs).
+.PARAMETER NonInteractive
+  Never show the menu or ask questions; use the parameters and safe defaults.
 .PARAMETER IncludeLicenseRestricted
   Also download non-commercial / research-only models (FLUX.1 dev, FLUX.2 dev, Qwen-Image 2.1).
   Requires -AcceptLicenses after you have read each licence.
@@ -58,7 +73,8 @@
 [CmdletBinding()]
 param(
     [string]$Root = '',
-    [ValidateSet('Auto', 'Full', 'Klein')][string]$ModelSet = 'Auto',
+    [ValidateSet('Auto', 'Full', 'Klein', 'Custom')][string]$ModelSet = 'Auto',
+    [string[]]$Presets = @(),
     [switch]$IncludeLicenseRestricted,
     [switch]$AcceptLicenses,
     [string]$Sd15CheckpointUrl = '',
@@ -76,17 +92,25 @@ param(
     [switch]$SkipHardwareCheck,
     [switch]$ForceRedownload,
     [switch]$DryRun,
+    [switch]$Cleanup,
+    [switch]$Uninstall,
+    [switch]$Yes,
+    [switch]$NonInteractive,
     [ValidateRange(60, 7200)][int]$TestTimeoutSec = 900
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# Parameters given on the command line: any "action" parameter skips the interactive menu.
+$script:BoundKeys = @($PSBoundParameters.Keys)
+$script:CustomPresetIds = @()
+$script:Interactive = $false
 
 # =============================================================================================
 # Constants
 # =============================================================================================
-$script:InstallerVersion = '0.9.0'
+$script:InstallerVersion = '0.10.0'
 $script:ProjectRepo      = 'brividich/local-ai-for-photoshop'
 $script:ManifestRawUrl   = "https://raw.githubusercontent.com/$($script:ProjectRepo)/main/manifest/openlayer-requirements.json"
 $script:ComfyRepo        = 'Comfy-Org/ComfyUI'
@@ -518,9 +542,18 @@ function Get-QualityGuide($Outlook, [double]$VramBytes) {
 # A preset is "enabled" when every model it needs is selected; a custom node package is
 # installed when at least one enabled preset uses it. Presets that need no listed model
 # (e.g. the Superprompt prompt enhancer) count for the Auto and Full sets.
-function Resolve-InstallPlan($Manifest, $Outlook = $null) {
+function Resolve-InstallPlan($Manifest, $Outlook = $null, [string]$Set = $ModelSet, [string[]]$PresetIds = @(), [switch]$Preview) {
     $allModels = @($Manifest.models)
-    $selected = switch ($ModelSet) {
+    $selected = switch ($Set) {
+        'Custom' {
+            $ids = @($PresetIds)
+            if ($ids.Count -eq 0) { $ids = @($script:CustomPresetIds) }
+            $known = @($Manifest.presets | ForEach-Object { $_.id })
+            $bad = @($ids | Where-Object { $known -notcontains $_ })
+            if ($bad.Count -gt 0) { Stop-Install "Unknown preset id(s): $($bad -join ', '). Valid ids: $($known -join ', ')" }
+            $keys = @($Manifest.presets | Where-Object { $ids -contains $_.id } | ForEach-Object { @($_.modelKeys) } | Sort-Object -Unique)
+            @($allModels | Where-Object { $keys -contains $_.key })
+        }
         'Klein' { @($allModels | Where-Object { $script:KleinModels -contains $_.modelName }) }
         'Auto' {
             if (-not $Outlook) { Stop-Install 'ModelSet Auto needs the GPU advisor (VRAM unknown): use -ModelSet Full or Klein.' }
@@ -533,7 +566,7 @@ function Resolve-InstallPlan($Manifest, $Outlook = $null) {
         default { @($allModels | Where-Object { $IncludeLicenseRestricted -or -not (Test-ModelRestricted $_) }) }
     }
     $restricted = @($selected | Where-Object { Test-ModelRestricted $_ })
-    if ($restricted.Count -gt 0 -and -not $AcceptLicenses) {
+    if ($restricted.Count -gt 0 -and -not $AcceptLicenses -and -not $Preview) {
         foreach ($m in $restricted) {
             Write-Host ("  {0}: {1} - {2}" -f $m.modelName, $m.licenseGate.name, $m.licenseGate.url) -ForegroundColor Yellow
         }
@@ -542,7 +575,7 @@ function Resolve-InstallPlan($Manifest, $Outlook = $null) {
     $selectedKeys = @($selected | ForEach-Object { $_.key })
     $enabledPresets = @($Manifest.presets | Where-Object {
         $keys = @($_.modelKeys)
-        ($keys.Count -gt 0 -or $ModelSet -ne 'Klein') -and @($keys | Where-Object { $selectedKeys -notcontains $_ }).Count -eq 0
+        ($keys.Count -gt 0 -or $Set -ne 'Klein') -and @($keys | Where-Object { $selectedKeys -notcontains $_ }).Count -eq 0
     })
     $nodeNames = @($enabledPresets | ForEach-Object { @($_.customNodePackages) } | Where-Object { $_ } | Sort-Object -Unique)
     $nodes = @($Manifest.customNodes | Where-Object { $nodeNames -contains $_.name })
@@ -864,7 +897,7 @@ function Start-ComfyUI {
     $running = Test-ComfyApi
     if ($running -and $script:NeedsRestart) {
         $proc = Get-ComfyProcess
-        if ($RestartComfyUI -and $proc) {
+        if ($proc -and ($RestartComfyUI -or (Read-YesNo 'ComfyUI is running: restart it now to load the new components?' $false))) {
             Write-Step "Restarting ComfyUI (PID $($proc.Id)) to load the new components."
             Stop-Process -Id $proc.Id -Force
             for ($i = 0; $i -lt 15 -and (Test-ComfyApi); $i++) { Start-Sleep -Seconds 1 }
@@ -1021,7 +1054,7 @@ function Install-OpenLayer {
     $script:Report.plugin.package = $ccx
 
     if (-not (Test-Path $script:UpiPath)) {
-        if ($InstallCreativeCloud) {
+        if ($InstallCreativeCloud -or (Read-YesNo 'Adobe Creative Cloud is not installed. Install it now with winget (official package Adobe.CreativeCloud)?' $false)) {
             $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
             if (-not $winget) { Stop-Install 'winget is not available: install Creative Cloud from adobe.com.' }
             Write-Step 'Installing the Adobe Creative Cloud desktop app (official winget package Adobe.CreativeCloud).'
@@ -1097,6 +1130,283 @@ function Invoke-Preflight {
 }
 
 # =============================================================================================
+# Interaction: menu, confirmations, preset picker
+# =============================================================================================
+function Test-Interactive {
+    if ($NonInteractive -or $Yes) { return $false }
+    try { if ([Console]::IsInputRedirected) { return $false } } catch { return $false }
+    return ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost')
+}
+
+function Read-YesNo([string]$Question, [bool]$Default) {
+    if ($Yes) { return $true }
+    if (-not $script:Interactive) { return $Default }
+    $hint = if ($Default) { '[Y/n]' } else { '[y/N]' }
+    while ($true) {
+        $answer = ([string](Read-Host "  $Question $hint")).Trim().ToLowerInvariant()
+        if (-not $answer) { return $Default }
+        if (@('y', 'yes', 's', 'si') -contains $answer) { return $true }
+        if (@('n', 'no') -contains $answer) { return $false }
+    }
+}
+
+function Read-Choice([string]$Prompt, [string[]]$Valid) {
+    while ($true) {
+        $answer = ([string](Read-Host "  $Prompt")).Trim().ToUpperInvariant()
+        if ($Valid -contains $answer) { return $answer }
+        Write-Host "  Please answer one of: $($Valid -join ', ')" -ForegroundColor Yellow
+    }
+}
+
+function ConvertFrom-NumberList([string]$Text, [int]$Max) {
+    # "3,7,12" or "3 7 12" or "4-9"
+    $numbers = New-Object System.Collections.Generic.List[int]
+    foreach ($token in ($Text -split '[,;\s]+' | Where-Object { $_ })) {
+        if ($token -match '^(\d+)-(\d+)$') {
+            $a = [int]$Matches[1]; $b = [int]$Matches[2]
+            if ($a -gt $b) { $t = $a; $a = $b; $b = $t }
+            for ($n = $a; $n -le $b; $n++) { if ($n -ge 1 -and $n -le $Max) { $numbers.Add($n) } }
+        } elseif ($token -match '^\d+$') {
+            $n = [int]$token
+            if ($n -ge 1 -and $n -le $Max) { $numbers.Add($n) }
+        }
+    }
+    return , @($numbers | Sort-Object -Unique)
+}
+
+function Get-PlanMissingBytes($Plan) {
+    $bytes = [int64]0
+    foreach ($m in $Plan.Models) { $bytes += (Get-ModelMissingBytes $m) }
+    if (-not (Test-Path $script:Python)) { $bytes += 10GB }   # ComfyUI archive + extraction, approximate
+    return $bytes
+}
+
+function Confirm-RestrictedLicences($Models) {
+    $restricted = @($Models | Where-Object { Test-ModelRestricted $_ })
+    if ($restricted.Count -eq 0) { return $true }
+    if ($AcceptLicenses) { return $true }
+    Write-Host ''
+    Write-Host '  These models have a restricted licence (non-commercial / research only):' -ForegroundColor Yellow
+    foreach ($m in $restricted) { Write-Host ("    {0}: {1} - {2}" -f $m.modelName, $m.licenseGate.name, $m.licenseGate.url) -ForegroundColor Yellow }
+    if (-not $script:Interactive) { return $false }
+    $answer = ([string](Read-Host "  Type ACCEPT if you have read these licences and accept them (anything else drops these models)")).Trim()
+    if ($answer -ceq 'ACCEPT') { $script:AcceptLicenses = $true; $script:IncludeLicenseRestricted = $true; return $true }
+    return $false
+}
+
+function Select-PresetsInteractive($Manifest, $Outlook) {
+    $items = @($Outlook | Where-Object { $_.Expectation -ne 'nomodel' })
+    $selected = @{}
+    foreach ($o in $items) {
+        if (@('comfortable', 'tight', 'unknown') -contains $o.Expectation -and -not $o.Restricted) { $selected[$o.Id] = $true }
+    }
+    $labels = @{ 'comfortable' = 'OK'; 'tight' = 'TIGHT'; 'offloads' = 'SLOW'; 'unknown' = '?' }
+    while ($true) {
+        Write-Host ''
+        Write-Host '  Choose the OpenLayer presets to install (presets that fit your GPU are preselected):' -ForegroundColor White
+        $i = 0
+        foreach ($o in $items) {
+            $i++
+            $mark = if ($selected.ContainsKey($o.Id)) { 'x' } else { ' ' }
+            $tags = @()
+            if ($o.Restricted) { $tags += 'restricted licence' }
+            if ($o.Status -eq 'experimental') { $tags += 'experimental' }
+            $size = if ($o.LargestBytes -gt 0) { Format-Size $o.LargestBytes } else { '-' }
+            $color = if ($selected.ContainsKey($o.Id)) { 'Green' } else { 'Gray' }
+            Write-Host ('  [{0}] {1,2}  {2,-17} {3,-46} {4,9}  {5,-5} {6}' -f $mark, $i, $o.Tool, $o.Name, $size, $labels[$o.Expectation], ($tags -join ', ')) -ForegroundColor $color
+        }
+        $ids = @($selected.Keys)
+        $preview = Resolve-InstallPlan $Manifest $Outlook 'Custom' $ids -Preview
+        Write-Host ('  Selected: {0} presets, {1} models, ~{2} to download' -f $ids.Count, $preview.Models.Count, (Format-Size (Get-PlanMissingBytes $preview))) -ForegroundColor Cyan
+        $answer = ([string](Read-Host '  Numbers to toggle (e.g. 3,7 or 4-9), A = all that fit, N = none, Enter = done')).Trim()
+        if (-not $answer) { break }
+        if ($answer -match '^[aA]$') {
+            $selected = @{}
+            foreach ($o in $items) { if (@('comfortable', 'tight', 'unknown') -contains $o.Expectation -and -not $o.Restricted) { $selected[$o.Id] = $true } }
+            continue
+        }
+        if ($answer -match '^[nN]$') { $selected = @{}; continue }
+        foreach ($n in (ConvertFrom-NumberList $answer $items.Count)) {
+            $id = $items[$n - 1].Id
+            if ($selected.ContainsKey($id)) { $selected.Remove($id) } else { $selected[$id] = $true }
+        }
+    }
+    return , @($selected.Keys)
+}
+
+function Show-MainMenu($Manifest, $Outlook) {
+    $summaries = @{}
+    foreach ($set in 'Auto', 'Full', 'Klein') {
+        $plan = Resolve-InstallPlan $Manifest $Outlook $set -Preview
+        $summaries[$set] = '{0} models, ~{1} to download' -f $plan.Models.Count, (Format-Size (Get-PlanMissingBytes $plan))
+    }
+    $installed = Test-Path $script:Python
+    $verb = if ($installed) { 'Install / update' } else { 'Install' }
+    Write-Host ''
+    Write-Host '  What do you want to do?' -ForegroundColor White
+    Write-Host ("   1) {0}: recommended for this GPU      ({1})" -f $verb, $summaries['Auto'])
+    Write-Host ("   2) {0}: everything freely licensed    ({1})" -f $verb, $summaries['Full'])
+    Write-Host ("   3) {0}: FLUX.2 klein only             ({1})" -f $verb, $summaries['Klein'])
+    Write-Host ("   4) {0}: choose the presets myself" -f $verb)
+    Write-Host '   5) Preview the recommended plan (dry run, changes nothing)'
+    Write-Host '   6) Clean up (download cache, partial files, old logs, unused models)'
+    Write-Host '   7) Uninstall'
+    Write-Host '   0) Exit'
+    switch (Read-Choice 'Choice' @('1', '2', '3', '4', '5', '6', '7', '0')) {
+        '1' { return @{ Action = 'install'; Set = 'Auto' } }
+        '2' { return @{ Action = 'install'; Set = 'Full' } }
+        '3' { return @{ Action = 'install'; Set = 'Klein' } }
+        '4' { return @{ Action = 'install'; Set = 'Custom' } }
+        '5' { return @{ Action = 'dryrun'; Set = 'Auto' } }
+        '6' { return @{ Action = 'cleanup'; Set = $ModelSet } }
+        '7' { return @{ Action = 'uninstall'; Set = $ModelSet } }
+        default { return @{ Action = 'exit'; Set = $ModelSet } }
+    }
+}
+
+# =============================================================================================
+# Cleanup and uninstall
+# =============================================================================================
+function Get-PathBytes([string]$Path) {
+    if (Test-Path -LiteralPath $Path -PathType Leaf) { return [int64](Get-Item -LiteralPath $Path).Length }
+    $sum = [int64]0
+    foreach ($f in @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue)) { $sum += $f.Length }
+    return $sum
+}
+
+function Get-CleanupCandidates {
+    $items = New-Object System.Collections.ArrayList
+    $add = { param($category, $path) [void]$items.Add([pscustomobject]@{ Category = $category; Path = $path; Bytes = (Get-PathBytes $path) }) }
+    if (Test-Path $script:Downloads) {
+        foreach ($f in Get-ChildItem -LiteralPath $script:Downloads -File -Force -ErrorAction SilentlyContinue) { & $add 'download cache' $f.FullName }
+    }
+    $modelsDir = Join-Path $script:ComfyDir 'models'
+    if (Test-Path $modelsDir) {
+        foreach ($f in Get-ChildItem -LiteralPath $modelsDir -Recurse -File -Force -Filter '*.part' -ErrorAction SilentlyContinue) { & $add 'partial download' $f.FullName }
+        foreach ($f in Get-ChildItem -LiteralPath $modelsDir -Recurse -File -Force -Filter '*.verified' -ErrorAction SilentlyContinue) {
+            if (-not (Test-Path -LiteralPath ($f.FullName -replace '\.verified$', ''))) { & $add 'orphan marker' $f.FullName }
+        }
+    }
+    if (Test-Path $script:Logs) {
+        foreach ($pattern in 'setup-*.log', 'report-*.json') {
+            $old = @(Get-ChildItem -LiteralPath $script:Logs -File -Filter $pattern -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5)
+            foreach ($f in $old) { if ($f.FullName -ne $script:LogFile) { & $add 'old logs (keeps the last 5)' $f.FullName } }
+        }
+    }
+    foreach ($sub in 'LocalAIForPhotoshop', 'PhotoshopLocalAI') {
+        $d = Join-Path $script:ComfyDir "output\$sub"
+        if (Test-Path $d) { & $add 'self-test images' $d }
+    }
+    if (Test-Path $script:Root) {
+        foreach ($d in Get-ChildItem -LiteralPath $script:Root -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'ComfyUI_windows_portable.incomplete-*' -or $_.Name -like '_extract*' }) {
+            & $add 'leftover folders' $d.FullName
+        }
+    }
+    return , @($items)
+}
+
+function Remove-PathQuiet([string]$Path) {
+    try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop; return $true }
+    catch { Add-Warning "Could not delete ${Path}: $($_.Exception.Message)"; return $false }
+}
+
+function Invoke-Cleanup($Manifest, $Outlook) {
+    Write-Step 'Cleanup'
+    $items = Get-CleanupCandidates
+    $freed = [int64]0
+    if ($items.Count -eq 0) { Write-Ok 'Nothing to clean: no cache, partial files, old logs or leftovers.' }
+    else {
+        foreach ($g in ($items | Group-Object Category)) {
+            $bytes = ($g.Group | Measure-Object -Property Bytes -Sum).Sum
+            Write-Host ('  {0,-28} {1,4} item(s)  {2,10}' -f $g.Name, $g.Count, (Format-Size $bytes))
+        }
+        $total = ($items | Measure-Object -Property Bytes -Sum).Sum
+        if (Read-YesNo ("Delete these {0} item(s) and free {1}?" -f $items.Count, (Format-Size $total)) $true) {
+            foreach ($it in $items) { if (Remove-PathQuiet $it.Path) { $freed += $it.Bytes } }
+            Write-Ok "Freed $(Format-Size $freed)."
+        }
+    }
+
+    # Installed models review: interactive only, never automatic.
+    $present = @($Manifest.models | Where-Object { Test-Path -LiteralPath (Get-ModelPath $_) })
+    if ($present.Count -eq 0) { $script:Report.cleanup = [ordered]@{ freedBytes = $freed }; return }
+    if (-not $script:Interactive) {
+        Write-Host '  Installed models are never removed automatically: run the script without parameters and choose "Clean up" to review them.' -ForegroundColor DarkGray
+        $script:Report.cleanup = [ordered]@{ freedBytes = $freed }
+        return
+    }
+    if (-not (Read-YesNo 'Review installed models and delete some?' $false)) { $script:Report.cleanup = [ordered]@{ freedBytes = $freed }; return }
+    $autoKeys = @()
+    if ($Outlook) { $autoKeys = @((Resolve-InstallPlan $Manifest $Outlook 'Auto' -Preview).Models | ForEach-Object { $_.key }) }
+    $usedBy = @{}
+    foreach ($p in $Manifest.presets) { foreach ($k in @($p.modelKeys)) { if (-not $usedBy.ContainsKey($k)) { $usedBy[$k] = @() }; $usedBy[$k] += [string]$p.displayName } }
+    Write-Host ''
+    $i = 0
+    foreach ($m in $present) {
+        $i++
+        $size = Get-PathBytes (Get-ModelPath $m)
+        $note = if ($autoKeys -contains $m.key) { 'recommended for this GPU' } else { 'not in the recommended set' }
+        $users = @($usedBy[$m.key] | Select-Object -Unique) -join ', '
+        Write-Host ('  {0,2}  {1,-58} {2,9}  {3}' -f $i, "$($m.targetFolder)/$($m.modelName)", (Format-Size $size), $note)
+        Write-Host ('      used by: {0}' -f $users) -ForegroundColor DarkGray
+    }
+    $answer = ([string](Read-Host '  Numbers of the models to delete (e.g. 2,5 or 4-6), Enter = none')).Trim()
+    $chosen = ConvertFrom-NumberList $answer $present.Count
+    if ($chosen.Count -eq 0) { Write-Step 'No model deleted.'; $script:Report.cleanup = [ordered]@{ freedBytes = $freed }; return }
+    $toDelete = @($chosen | ForEach-Object { $present[$_ - 1] })
+    $bytes = [int64]0
+    foreach ($m in $toDelete) { $bytes += Get-PathBytes (Get-ModelPath $m) }
+    Write-Host ('  Will delete: {0}' -f (($toDelete | ForEach-Object { $_.modelName }) -join ', ')) -ForegroundColor Yellow
+    if (Read-YesNo ("Delete {0} model(s) and free {1}? The OpenLayer presets that use them will show as Missing." -f $toDelete.Count, (Format-Size $bytes)) $false) {
+        foreach ($m in $toDelete) {
+            $path = Get-ModelPath $m
+            $size = Get-PathBytes $path
+            if (Remove-PathQuiet $path) { $freed += $size }
+            Remove-Item -LiteralPath "$path.verified" -Force -ErrorAction SilentlyContinue
+        }
+        Write-Ok ("Deleted {0} model(s). Re-run with -ModelSet Custom or the menu to get them back." -f $toDelete.Count)
+    }
+    $script:Report.cleanup = [ordered]@{ freedBytes = [int64]$freed; deletedModels = @($toDelete | ForEach-Object { $_.modelName }) }
+}
+
+function Invoke-Uninstall {
+    Write-Step 'Uninstall'
+    if ($PSCommandPath -and $PSCommandPath.StartsWith($script:Root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Stop-Install "The installer is inside $($script:Root): move it elsewhere before uninstalling."
+    }
+    $hasUpi = Test-Path $script:UpiPath
+    $pluginInstalled = $false
+    if ($hasUpi) { $pluginInstalled = Test-OpenLayerInstalled }
+    $size = Get-PathBytes $script:Root
+    Write-Host '  This will:' -ForegroundColor Yellow
+    if ($pluginInstalled) { Write-Host '   - remove the OpenLayer plugin from Photoshop' -ForegroundColor Yellow }
+    Write-Host '   - stop ComfyUI if it is running from this folder' -ForegroundColor Yellow
+    Write-Host ("   - delete {0} ({1}: ComfyUI, models, logs)" -f $script:Root, (Format-Size $size)) -ForegroundColor Yellow
+    Write-Host '  7-Zip, Git and Creative Cloud are left installed.' -ForegroundColor DarkGray
+    $confirmed = $false
+    if ($script:Interactive) {
+        $confirmed = (([string](Read-Host '  Type UNINSTALL to confirm')).Trim() -ceq 'UNINSTALL')
+    } elseif ($Yes) { $confirmed = $true }
+    if (-not $confirmed) { Write-Step 'Uninstall cancelled.'; $script:Report.status = 'cancelled'; return }
+
+    if ($pluginInstalled) {
+        [void](Invoke-Native $script:UpiPath @('/remove', 'OpenLayer'))
+        if (Test-OpenLayerInstalled) { Add-Warning 'OpenLayer is still listed: remove it from Creative Cloud > Plugins.' } else { Write-Ok 'OpenLayer removed.' }
+    }
+    $proc = Get-ComfyProcess
+    if ($proc) { Write-Step "Stopping ComfyUI (PID $($proc.Id))."; Stop-Process -Id $proc.Id -Force; Start-Sleep -Seconds 2 }
+    # The transcript and the report live inside the folder being deleted.
+    try { Stop-Transcript | Out-Null } catch { }
+    $script:Report = $null
+    try {
+        Remove-Item -LiteralPath $script:Root -Recurse -Force -ErrorAction Stop
+        Write-Ok "Deleted $($script:Root). Uninstall complete."
+    } catch {
+        Write-Warning "Some files could not be deleted ($($_.Exception.Message)). Close ComfyUI/Photoshop and delete $($script:Root) by hand."
+    }
+}
+
+# =============================================================================================
 # Main
 # =============================================================================================
 function Initialize-Context {
@@ -1115,6 +1425,8 @@ function Initialize-Context {
     $script:NeedsRestart = $false
     $script:VramBytes = 0
     $script:QualityGuide = $null
+    $script:DryRunMode = $false
+    $script:Interactive = Test-Interactive
     foreach ($p in @($script:Root, $script:Downloads, $script:Logs)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
     $script:LogFile = Join-Path $script:Logs "setup-$($script:RunStamp).log"
     try { Start-Transcript -Path $script:LogFile -ErrorAction Stop | Out-Null } catch { Write-Warning "Transcript unavailable: $_" }
@@ -1155,8 +1467,9 @@ function Invoke-Main {
     $exitCode = 1
     try {
         Initialize-Context
-        Write-Step "Local AI for Photoshop $($script:InstallerVersion) - ComfyUI + OpenLayer ($ModelSet model set)"
+        Write-Step "Local AI for Photoshop $($script:InstallerVersion) - ComfyUI + OpenLayer"
         Write-Host '  Unofficial installer, not affiliated with Adobe, Comfy Org or OpenLayer.' -ForegroundColor DarkGray
+        if ($Uninstall) { Invoke-Uninstall; $exitCode = 0; return $exitCode }
 
         Invoke-Preflight
         $manifest = Get-Manifest
@@ -1170,8 +1483,48 @@ function Invoke-Main {
         $script:Report.qualityPicks = @(Get-ToolPicks $outlook | ForEach-Object {
             [ordered]@{ tool = $_.Tool; fast = $(if ($_.Fast) { $_.Fast.Id } else { $null }); quality = $(if ($_.Quality) { $_.Quality.Id } else { $null }) }
         })
-        $plan = Resolve-InstallPlan $manifest $outlook
-        if ($ModelSet -eq 'Auto') {
+        # ---------------------------------------------------------------- what to do
+        $actionKeys = @('ModelSet', 'Presets', 'DryRun', 'Cleanup', 'Uninstall')
+        $hasActionParam = (@($script:BoundKeys | Where-Object { $actionKeys -contains $_ }).Count -gt 0)
+        $action = 'install'
+        $set = $ModelSet
+        if (@($Presets).Count -gt 0) { $set = 'Custom'; $script:CustomPresetIds = @($Presets) }
+        if ($DryRun) { $action = 'dryrun' }
+        if ($Cleanup) { $action = 'cleanup' }
+        if ($script:Interactive -and -not $hasActionParam) {
+            $choice = Show-MainMenu $manifest $outlook
+            $action = $choice.Action
+            $set = $choice.Set
+            if ($action -eq 'install' -and $set -eq 'Custom') {
+                $script:CustomPresetIds = @(Select-PresetsInteractive $manifest $outlook)
+                if ($script:CustomPresetIds.Count -eq 0) { Write-Step 'No preset selected.'; $action = 'exit' }
+            }
+        }
+        if ($set -eq 'Custom' -and $script:CustomPresetIds.Count -eq 0 -and $action -ne 'exit') { Stop-Install '-ModelSet Custom needs -Presets id1,id2,... (or use the interactive menu).' }
+        $script:ModelSet = $set
+        $script:Report.parameters.ModelSet = $set
+        switch ($action) {
+            'exit'      { $script:Report.status = 'cancelled'; $script:Report.test.status = 'skipped'; $exitCode = 0; return $exitCode }
+            'cleanup'   { Invoke-Cleanup $manifest $outlook; if ($script:Report) { $script:Report.status = 'cleanup'; $script:Report.test.status = 'skipped' }; $exitCode = 0; return $exitCode }
+            'uninstall' { Invoke-Uninstall; $exitCode = 0; return $exitCode }
+            'dryrun'    { $script:DryRunMode = $true }
+        }
+        if ($set -eq 'Custom') {
+            $restrictedPresets = @($outlook | Where-Object { $script:CustomPresetIds -contains $_.Id -and $_.Restricted })
+            if ($restrictedPresets.Count -gt 0) {
+                $keys = @($restrictedPresets | ForEach-Object { $_.ModelKeys })
+                $restrictedModels = @($manifest.models | Where-Object { $keys -contains $_.key })
+                if (-not (Confirm-RestrictedLicences $restrictedModels)) {
+                    $drop = @($restrictedPresets | ForEach-Object { $_.Id })
+                    $script:CustomPresetIds = @($script:CustomPresetIds | Where-Object { $drop -notcontains $_ })
+                    Add-Warning "Restricted-licence presets dropped (licence not accepted): $(($restrictedPresets | ForEach-Object { $_.Name }) -join ', ')"
+                    if ($script:CustomPresetIds.Count -eq 0) { Stop-Install 'No preset left to install.' }
+                }
+            }
+        }
+
+        $plan = Resolve-InstallPlan $manifest $outlook $set
+        if ($set -eq 'Auto') {
             $left = @($outlook | Where-Object { -not $_.Restricted -and $_.Expectation -eq 'offloads' })
             if ($left.Count -gt 0) {
                 Write-Host ("  Auto skips {0} preset(s) too heavy for this GPU ({1}); use -ModelSet Full to install them anyway." -f $left.Count, (($left | ForEach-Object { $_.Name }) -join ', ')) -ForegroundColor DarkGray
@@ -1195,7 +1548,7 @@ function Invoke-Main {
         $needGB = [math]::Ceiling($missingBytes / 1GB) + $script:MinFreeMarginGB
         if ((Get-FreeGB $script:Root) -lt $needGB) { Stop-Install "Not enough free space: about $needGB GB needed on $([System.IO.Path]::GetPathRoot($script:Root))." }
 
-        if ($DryRun) {
+        if ($DryRun -or $script:DryRunMode) {
             Write-Host ''
             foreach ($m in $plan.Models) {
                 $state = if (Test-ModelPresent $m) { 'present' } else { 'download' }
@@ -1204,6 +1557,13 @@ function Invoke-Main {
             foreach ($n in $plan.CustomNodes) { Write-Host "  [node    ] $($n.name)  $($n.repoUrl)" }
             $script:Report.status = 'dry-run'
             $script:Report.test.status = 'skipped'
+            $exitCode = 0
+            return $exitCode
+        }
+
+        if (-not (Read-YesNo ("Install now into {0} (~{1} to download)?" -f $script:Root, (Format-Size $missingBytes)) $true)) {
+            Write-Step 'Cancelled: nothing was changed.'
+            $script:Report.status = 'cancelled'; $script:Report.test.status = 'skipped'
             $exitCode = 0
             return $exitCode
         }

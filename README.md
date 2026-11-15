@@ -34,22 +34,37 @@ cannot be done automatically.
 ## Quick start
 
 1. Download this repository (**Code > Download ZIP**) and extract it, or `git clone` it.
-2. Open a **normal** (non-administrator) PowerShell in the folder and preview the plan:
-
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LocalAI.ps1 -DryRun
-   ```
-
-3. Install:
+2. Open a **normal** (non-administrator) PowerShell in the folder and run:
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LocalAI.ps1
    ```
 
+3. After the checks and the GPU advisor, pick what to do from the menu:
+
+   ```
+     What do you want to do?
+      1) Install: recommended for this GPU      (22 models, ~48 GB to download)
+      2) Install: everything freely licensed    (31 models, ~126 GB to download)
+      3) Install: FLUX.2 klein only             (3 models, ~13 GB to download)
+      4) Install: choose the presets myself
+      5) Preview the recommended plan (dry run, changes nothing)
+      6) Clean up (download cache, partial files, old logs, unused models)
+      7) Uninstall
+      0) Exit
+   ```
+
+   Option 4 lists every OpenLayer preset with its size and GPU rating; the ones that fit are
+   preselected and you toggle the others by number. The script asks before downloading, before
+   restarting ComfyUI and before installing Creative Cloud.
+
 4. Restart Photoshop and open **Plugins > OpenLayer**. ComfyUI must be running: start it any
    time with `Start-ComfyUI.cmd` in the install folder.
 
 Interrupted? Run the same command again: finished files are skipped, partial downloads resume.
+
+**Unattended runs**: any of `-ModelSet`, `-Presets`, `-DryRun`, `-Cleanup` or `-Uninstall` skips the
+menu; add `-Yes` to answer every confirmation, or `-NonInteractive` to never ask anything.
 
 ## What gets installed
 
@@ -121,10 +136,14 @@ plugin instead of a hand-maintained list. See [manifest/SOURCE.md](manifest/SOUR
 | Parameter | Effect |
 | --- | --- |
 | `-Root <path>` | install folder (default `D:\AI\PhotoshopLocalAI`, or `C:\` if there is no D:) |
-| `-ModelSet Auto\|Full\|Klein` | which models to install (see above) |
+| `-ModelSet Auto\|Full\|Klein\|Custom` | which models to install (see above) |
 | `-IncludeLicenseRestricted -AcceptLicenses` | also download non-commercial / research-only models |
 | `-Sd15CheckpointUrl <url>` | download an SD 1.5 checkpoint into `models\checkpoints` |
+| `-Presets id1,id2` | install exactly these OpenLayer presets (implies `-ModelSet Custom`) |
 | `-DryRun` | checks + plan + download size, changes nothing |
+| `-Cleanup` | remove download cache, partial downloads, old logs, test images, leftovers |
+| `-Uninstall` | remove the plugin, stop ComfyUI, delete the install folder (type `UNINSTALL`, or `-Yes`) |
+| `-Yes` / `-NonInteractive` | answer yes to every question / never ask (no menu) |
 | `-UpdateComfyUI` | update an existing ComfyUI with the official portable updater |
 | `-RestartComfyUI` | restart a running ComfyUI of this install to load new nodes |
 | `-InstallCreativeCloud` | install the Creative Cloud desktop app with winget (`Adobe.CreativeCloud`) |
@@ -163,10 +182,15 @@ status, the test result and all warnings. A full transcript is in `Logs\setup-*.
 | OpenLayer panel not "Ready" | Panel **Settings > Find ComfyUI Active Port**; ComfyUI must be running. |
 | "Agent Bridge is not connected" in the panel | Only the optional *Ask the Agent* feature uses it: just press **Generate**. |
 
-## Uninstall
+## Cleanup and uninstall
 
-1. `"C:\Program Files\Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe" /remove OpenLayer`
-2. Close ComfyUI and delete the install folder (e.g. `D:\AI\PhotoshopLocalAI`).
+- **Clean up** (menu option 6 or `-Cleanup`): deletes the download cache (ComfyUI archive, `.ccx`,
+  zips), partial `.part` files, orphan markers, logs older than the last five, self-test images and
+  leftover folders, after showing the total. In the menu it then offers to review the installed
+  models, shows which presets use each one and whether it is in the recommended set, and deletes
+  only the ones you pick. Models are never deleted automatically.
+- **Uninstall** (menu option 7 or `-Uninstall`): removes OpenLayer through Adobe's installer, stops
+  ComfyUI if it runs from the install folder and deletes the folder after you type `UNINSTALL`.
 
 Nothing else is changed on the system, except 7-Zip (and Creative Cloud with
 `-InstallCreativeCloud`) when they were installed through winget.

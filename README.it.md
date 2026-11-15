@@ -26,17 +26,16 @@ usare. Ogni passaggio è verificato, riprendibile e si chiude con una generazion
 ## Avvio rapido
 
 1. Scarica il repository (**Code > Download ZIP**) ed estrailo, oppure `git clone`.
-2. Apri un PowerShell **normale** (non amministratore) nella cartella e guarda cosa farebbe:
-
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LocalAI.ps1 -DryRun
-   ```
-
-3. Installa:
+2. Apri un PowerShell **normale** (non amministratore) nella cartella e lancia:
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LocalAI.ps1
    ```
+
+3. Dopo i controlli e i consigli per la GPU scegli dal menu: installa il set consigliato, tutto,
+   solo Klein, oppure **scegli tu i preset** (elenco numerato con dimensioni e valutazione GPU, quelli
+   adatti sono già selezionati), anteprima, pulizia o disinstallazione. Prima di scaricare, di
+   riavviare ComfyUI o di installare Creative Cloud lo script chiede conferma.
 
 4. Riavvia Photoshop e apri **Plugin > OpenLayer**. ComfyUI deve essere in esecuzione: lo avvii
    quando vuoi con `Start-ComfyUI.cmd` nella cartella di installazione.
@@ -85,12 +84,18 @@ passa l'URL diretto con `-Sd15CheckpointUrl` oppure copialo in `ComfyUI\models\c
 L'elenco dei modelli (`manifest/openlayer-requirements.json`) è generato dalla build di OpenLayer
 stessa e viene aggiornato ogni settimana da una GitHub Action che apre una pull request.
 
+Per l'uso senza menu basta passare uno tra `-ModelSet`, `-Presets`, `-DryRun`, `-Cleanup`,
+`-Uninstall`; `-Yes` risponde sì a tutte le domande, `-NonInteractive` non chiede mai nulla.
+
 ## Parametri principali
 
 | Parametro | Effetto |
 | --- | --- |
 | `-Root <percorso>` | cartella di installazione (predefinita `D:\AI\PhotoshopLocalAI`) |
-| `-ModelSet Auto\|Full\|Klein` | quali modelli installare |
+| `-ModelSet Auto\|Full\|Klein\|Custom` | quali modelli installare |
+| `-Presets id1,id2` | installa esattamente questi preset di OpenLayer |
+| `-Cleanup` | svuota cache dei download, file parziali, log vecchi, immagini di test |
+| `-Uninstall` | rimuove plugin e cartella (chiede di scrivere `UNINSTALL`) |
 | `-DryRun` | controlli + piano + dimensione download, senza modificare nulla |
 | `-UpdateComfyUI` | aggiorna ComfyUI con l'updater ufficiale della versione portable |
 | `-RestartComfyUI` | riavvia ComfyUI di questa installazione per caricare i nuovi nodi |
@@ -115,10 +120,14 @@ Codici di uscita: `0` tutto OK con test superato, `2` completato con avvisi, `1`
 | Pannello non "Ready" | **Settings > Find ComfyUI Active Port** nel pannello, con ComfyUI avviato. |
 | "Agent Bridge is not connected" | Riguarda solo la funzione opzionale *Ask the Agent*: premi **Generate**. |
 
-## Disinstallazione
+## Pulizia e disinstallazione
 
-1. `"C:\Program Files\Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe" /remove OpenLayer`
-2. Chiudi ComfyUI ed elimina la cartella di installazione.
+- **Pulizia** (voce 6 del menu o `-Cleanup`): elimina cache dei download, file `.part`, log oltre
+  gli ultimi cinque, immagini di test e cartelle avanzate, dopo averti mostrato il totale. Dal menu
+  propone poi di rivedere i modelli installati (chi li usa, se fanno parte del set consigliato) e
+  cancella solo quelli che scegli. I modelli non vengono mai cancellati in automatico.
+- **Disinstallazione** (voce 7 o `-Uninstall`): rimuove OpenLayer, ferma ComfyUI e cancella la
+  cartella dopo che hai scritto `UNINSTALL`.
 
 ## Licenza
 

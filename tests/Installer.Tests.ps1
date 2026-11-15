@@ -100,6 +100,36 @@ Describe 'GPU advisor' {
     }
 }
 
+Describe 'Interactive helpers and custom presets' {
+    It 'parses number lists and ranges' {
+        (ConvertFrom-NumberList '3, 7 4-5 99' 10) -join ',' | Should -Be '3,4,5,7'
+        (ConvertFrom-NumberList '' 10).Count | Should -Be 0
+    }
+    It 'returns the default answer when not interactive' {
+        $script:Interactive = $false; $Yes = $false
+        Read-YesNo 'q' $true | Should -BeTrue
+        Read-YesNo 'q' $false | Should -BeFalse
+    }
+    It 'answers yes to everything with -Yes' {
+        $Yes = $true
+        Read-YesNo 'q' $false | Should -BeTrue
+    }
+    It 'Custom installs exactly the models of the chosen presets' {
+        $AcceptLicenses = $false
+        $plan = Resolve-InstallPlan $script:Manifest $null 'Custom' @('upscale-seedvr2-3b')
+        @($plan.Models.modelName) | Should -Contain 'seedvr2_3b_int8_convrot.safetensors'
+        @($plan.Models.modelName) | Should -Not -Contain 'flux-2-klein-4b-fp8.safetensors'
+    }
+    It 'Custom rejects unknown preset ids' {
+        { Resolve-InstallPlan $script:Manifest $null 'Custom' @('no-such-preset') } | Should -Throw '*Unknown preset*'
+    }
+    It 'Preview mode skips the licence gate' {
+        $AcceptLicenses = $false
+        { Resolve-InstallPlan $script:Manifest $null 'Custom' @('txt2img-qwen-image-21') -Preview } | Should -Not -Throw
+        { Resolve-InstallPlan $script:Manifest $null 'Custom' @('txt2img-qwen-image-21') } | Should -Throw '*AcceptLicenses*'
+    }
+}
+
 Describe 'Helpers' {
     It 'normalises GitHub and Hugging Face digests' {
         $hex = 'AB' * 32
