@@ -65,6 +65,26 @@ Describe 'Resolve-InstallPlan' {
     }
 }
 
+Describe 'GPU advisor' {
+    It 'rates the FLUX.2 klein text-to-image preset comfortable on 16 GB and offloading on 6 GB' {
+        $o16 = Get-PresetOutlook $script:Manifest (16GB)
+        ($o16 | Where-Object Id -eq 'txt2img-flux2-klein').Expectation | Should -Be 'comfortable'
+        $o6 = Get-PresetOutlook $script:Manifest (6GB)
+        ($o6 | Where-Object Id -eq 'txt2img-flux2-klein').Expectation | Should -Be 'offloads'
+    }
+    It 'Auto installs more on a bigger GPU and never restricted models by default' {
+        $ModelSet = 'Auto'; $IncludeLicenseRestricted = $false; $AcceptLicenses = $false
+        $small = Resolve-InstallPlan $script:Manifest (Get-PresetOutlook $script:Manifest (8GB))
+        $big = Resolve-InstallPlan $script:Manifest (Get-PresetOutlook $script:Manifest (24GB))
+        $big.Models.Count | Should -BeGreaterThan $small.Models.Count
+        @($big.Models | Where-Object { Test-ModelRestricted $_ }).Count | Should -Be 0
+    }
+    It 'Auto refuses to run without a VRAM figure' {
+        $ModelSet = 'Auto'
+        { Resolve-InstallPlan $script:Manifest $null } | Should -Throw '*VRAM*'
+    }
+}
+
 Describe 'Helpers' {
     It 'normalises GitHub and Hugging Face digests' {
         $hex = 'AB' * 32

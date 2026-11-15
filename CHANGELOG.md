@@ -6,7 +6,10 @@ First public release (beta).
 
 - Manifest-driven installer: models, folders, sizes, SHA256 and custom nodes come from
   OpenLayer's own generated `requirements.json`.
-- `-ModelSet Full` (all freely-licensed models) and `-ModelSet Klein` (FLUX.2 [klein] 4B only).
+- GPU advisor: rates every OpenLayer preset OK / TIGHT / SLOW for the detected VRAM (same rule as
+  OpenLayer's Setup outlook) and marks the recommended preset of each tool.
+- `-ModelSet Auto` (default: every freely-licensed preset that fits the GPU), `Full` (all
+  freely-licensed models) and `Klein` (FLUX.2 [klein] 4B only).
 - Licence-restricted models only with `-IncludeLicenseRestricted -AcceptLicenses`.
 - Resumable `.part` downloads with size + SHA256 verification and cached verification markers.
 - ComfyUI Portable install/update, PyTorch CUDA check, version checks.

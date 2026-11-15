@@ -43,12 +43,26 @@ usare. Ogni passaggio è verificato, riprendibile e si chiude con una generazion
 
 Si è interrotto? Rilancia lo stesso comando: i file completi vengono saltati, i download parziali ripresi.
 
+## Consigli in base alla GPU
+
+Prima di scaricare qualsiasi cosa lo script legge la VRAM della tua scheda e valuta ogni preset di
+OpenLayer, raggruppato per strumento, con la stessa regola del pannello Setup di OpenLayer (il file
+di modello più grande del preset confrontato con la VRAM):
+
+- `OK`: gira a piena velocità
+- `TIGHT`: ci sta, ma rallenta con tele grandi
+- `SLOW`: ComfyUI tiene parte del modello in RAM (più lento, non rotto)
+
+Per ogni strumento il miglior preset a licenza libera è segnato `RECOMMENDED`. La tabella compare
+anche con `-DryRun` e finisce nel report.
+
 ## Set di modelli
 
-| `-ModelSet` | Modelli | Download | Strumenti OpenLayer |
+| `-ModelSet` | Modelli | Download | Quando usarlo |
 | --- | --- | --- | --- |
-| `Full` (predefinito) | tutti i modelli **senza** licenza restrittiva (31 oggi) | ~126 GB | tutti quelli con modelli a licenza libera |
-| `Klein` | solo FLUX.2 [klein] 4B | ~12,5 GB | Text to Image, Image to Image, Edit Image, Inpaint, Multi-Reference |
+| `Auto` (predefinito) | tutti i preset a licenza libera valutati `OK` o `TIGHT` per **la tua** GPU | ~24 GB con 8 GB di VRAM, ~64 GB con 16 GB, ~116 GB con 24 GB | vuoi tutto ciò che gira bene sulla tua scheda |
+| `Full` | tutti i modelli **senza** licenza restrittiva (31 oggi) | ~126 GB | vuoi tutto, anche i preset che andranno lenti |
+| `Klein` | solo FLUX.2 [klein] 4B | ~12,5 GB | poco spazio o avvio rapido |
 
 I modelli che OpenLayer segna come a licenza restrittiva (FLUX.1 dev, FLUX.2 dev, Qwen-Image 2.1:
 non commerciali o solo ricerca) **non vengono mai scaricati di default**. Per includerli devi
@@ -65,7 +79,7 @@ stessa e viene aggiornato ogni settimana da una GitHub Action che apre una pull 
 | Parametro | Effetto |
 | --- | --- |
 | `-Root <percorso>` | cartella di installazione (predefinita `D:\AI\PhotoshopLocalAI`) |
-| `-ModelSet Full\|Klein` | quali modelli installare |
+| `-ModelSet Auto\|Full\|Klein` | quali modelli installare |
 | `-DryRun` | controlli + piano + dimensione download, senza modificare nulla |
 | `-UpdateComfyUI` | aggiorna ComfyUI con l'updater ufficiale della versione portable |
 | `-RestartComfyUI` | riavvia ComfyUI di questa installazione per caricare i nuovi nodi |

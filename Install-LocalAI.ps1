@@ -30,7 +30,9 @@
 .PARAMETER Root
   Install folder. Default: D:\AI\PhotoshopLocalAI if D: exists, otherwise C:\AI\PhotoshopLocalAI.
 .PARAMETER ModelSet
-  Full  (default) every model without a restricted licence (~126 GB) and the custom nodes they need.
+  Auto  (default) every freely-licensed preset that fits this GPU's VRAM ("comfortable" or
+        "tight" in the GPU advisor), with the models and custom nodes they need.
+  Full  every model without a restricted licence (~126 GB), whatever the GPU.
   Klein only the FLUX.2 [klein] 4B stack (~12.5 GB, Apache-2.0) and the nodes its presets need.
 .PARAMETER IncludeLicenseRestricted
   Also download non-commercial / research-only models (FLUX.1 dev, FLUX.2 dev, Qwen-Image 2.1).
@@ -56,7 +58,7 @@
 [CmdletBinding()]
 param(
     [string]$Root = '',
-    [ValidateSet('Full', 'Klein')][string]$ModelSet = 'Full',
+    [ValidateSet('Auto', 'Full', 'Klein')][string]$ModelSet = 'Auto',
     [switch]$IncludeLicenseRestricted,
     [switch]$AcceptLicenses,
     [string]$Sd15CheckpointUrl = '',
@@ -334,14 +336,91 @@ function Test-ModelRestricted($Model) {
     return [bool]($Model.PSObject.Properties['licenseGate'] -and $Model.licenseGate)
 }
 
+# ---------------------------------------------------------------------------------------------
+# GPU advisor. Same rule as OpenLayer's own Setup outlook (src/comfy/presetFootprint.ts):
+# ComfyUI loads and offloads components stage by stage, so the LARGEST single file of a preset
+# is the proxy for what must sit in VRAM at once.
+#   largest <= 70% VRAM -> comfortable | <= VRAM -> tight | > VRAM -> offloads (slower, not broken)
+#   a model with no published size -> unknown | no listed model -> nomodel
+# ---------------------------------------------------------------------------------------------
+$script:ToolLabels = @{
+    'txt2img' = 'Text to Image'; 'img2img' = 'Image to Image'; 'sketch2img' = 'Sketch to Image'; 'inpaint' = 'Inpaint'
+    'outpaint' = 'Outpaint'; 'prompt' = 'Prompt from Layer'; 'upscale' = 'Upscale'; 'style-reference' = 'Style Reference'
+    'multi-reference' = 'Multi-Reference'; 'unflatten' = 'Unflatten'; 'remove-background' = 'Remove Background'
+    'layer-maps' = 'Layer Maps'; 'enhance-prompt' = 'Enhance Prompt'; 'select' = 'Select by Text'; 'camera-angle' = 'Camera Angle'
+}
+$script:OutlookRank = @{ 'comfortable' = 0; 'tight' = 1; 'offloads' = 2; 'unknown' = 3; 'nomodel' = 4 }
+
+function Get-PresetOutlook($Manifest, [double]$VramBytes) {
+    $byKey = @{}
+    foreach ($m in $Manifest.models) { $byKey[$m.key] = $m }
+    $result = foreach ($p in $Manifest.presets) {
+        $keys = @($p.modelKeys)
+        $largest = [int64]0; $largestName = $null; $total = [int64]0; $unknown = 0; $restricted = $false
+        foreach ($k in $keys) {
+            $m = $byKey[$k]
+            if (-not $m) { $unknown++; continue }
+            if (Test-ModelRestricted $m) { $restricted = $true }
+            $size = [int64]0
+            if ($m.PSObject.Properties['sizeBytes'] -and $m.sizeBytes) { $size = [int64]$m.sizeBytes }
+            if ($size -le 0) { $unknown++; continue }
+            $total += $size
+            if ($size -gt $largest) { $largest = $size; $largestName = $m.modelName }
+        }
+        $expectation = if ($keys.Count -eq 0) { 'nomodel' }
+            elseif ($VramBytes -le 0) { 'unknown' }
+            elseif ($largest -le $VramBytes * 0.7) { $(if ($unknown -gt 0) { 'unknown' } else { 'comfortable' }) }
+            elseif ($largest -le $VramBytes) { 'tight' }
+            else { 'offloads' }
+        $tool = $script:ToolLabels[[string]$p.mode]
+        if (-not $tool) { $tool = [string]$p.mode }
+        [pscustomobject]@{
+            Id = [string]$p.id; Name = [string]$p.displayName; Tool = $tool; Status = [string]$p.status
+            Expectation = $expectation; LargestBytes = $largest; LargestName = $largestName; TotalBytes = $total
+            Restricted = $restricted; ModelKeys = $keys
+        }
+    }
+    return , @($result | Sort-Object Tool, @{ Expression = { $script:OutlookRank[$_.Expectation] } }, LargestBytes, Id)
+}
+
+function Show-GpuAdvisor($Outlook, [double]$VramBytes) {
+    Write-Host ''
+    Write-Step ('GPU advisor for {0:N1} GB of VRAM (OpenLayer presets, largest model vs VRAM)' -f ($VramBytes / 1GB))
+    $marks = @{ 'comfortable' = 'OK   '; 'tight' = 'TIGHT'; 'offloads' = 'SLOW '; 'unknown' = '?    '; 'nomodel' = '-    ' }
+    $colors = @{ 'comfortable' = 'Green'; 'tight' = 'Yellow'; 'offloads' = 'DarkYellow'; 'unknown' = 'Gray'; 'nomodel' = 'Gray' }
+    foreach ($group in ($Outlook | Group-Object Tool)) {
+        $best = @($group.Group | Where-Object { -not $_.Restricted -and $_.Expectation -eq 'comfortable' }) | Select-Object -First 1
+        if (-not $best) { $best = @($group.Group | Where-Object { -not $_.Restricted -and $_.Expectation -eq 'tight' }) | Select-Object -First 1 }
+        Write-Host ("  {0}" -f $group.Name) -ForegroundColor White
+        foreach ($o in $group.Group) {
+            $flags = @()
+            if ($best -and $o.Id -eq $best.Id) { $flags += 'RECOMMENDED' }
+            if ($o.Restricted) { $flags += 'restricted licence' }
+            if ($o.Status -eq 'experimental') { $flags += 'experimental' }
+            $size = if ($o.LargestBytes -gt 0) { Format-Size $o.LargestBytes } else { '-' }
+            Write-Host ('    [{0}] {1,-38} {2,9}  {3}' -f $marks[$o.Expectation], $o.Name, $size, ($flags -join ', ')) -ForegroundColor $colors[$o.Expectation]
+        }
+    }
+    Write-Host '  OK = full speed | TIGHT = fits, slower on big canvases | SLOW = ComfyUI offloads to RAM | ? = size not published | - = no listed model (your own checkpoint, or the node fetches it)' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
 # Picks the models and custom node packages for the chosen model set.
 # A preset is "enabled" when every model it needs is selected; a custom node package is
 # installed when at least one enabled preset uses it. Presets that need no listed model
-# (e.g. the Superprompt prompt enhancer) count only for the Full set.
-function Resolve-InstallPlan($Manifest) {
+# (e.g. the Superprompt prompt enhancer) count for the Auto and Full sets.
+function Resolve-InstallPlan($Manifest, $Outlook = $null) {
     $allModels = @($Manifest.models)
     $selected = switch ($ModelSet) {
         'Klein' { @($allModels | Where-Object { $script:KleinModels -contains $_.modelName }) }
+        'Auto' {
+            if (-not $Outlook) { Stop-Install 'ModelSet Auto needs the GPU advisor (VRAM unknown): use -ModelSet Full or Klein.' }
+            $fitKeys = @($Outlook | Where-Object {
+                # 'unknown' only happens when the known files already fit in 70% of VRAM (Florence-2).
+                @('comfortable', 'tight', 'unknown') -contains $_.Expectation -and ($IncludeLicenseRestricted -or -not $_.Restricted)
+            } | ForEach-Object { $_.ModelKeys } | Sort-Object -Unique)
+            @($allModels | Where-Object { $fitKeys -contains $_.key })
+        }
         default { @($allModels | Where-Object { $IncludeLicenseRestricted -or -not (Test-ModelRestricted $_) }) }
     }
     $restricted = @($selected | Where-Object { Test-ModelRestricted $_ })
@@ -354,7 +433,7 @@ function Resolve-InstallPlan($Manifest) {
     $selectedKeys = @($selected | ForEach-Object { $_.key })
     $enabledPresets = @($Manifest.presets | Where-Object {
         $keys = @($_.modelKeys)
-        ($keys.Count -gt 0 -or $ModelSet -eq 'Full') -and @($keys | Where-Object { $selectedKeys -notcontains $_ }).Count -eq 0
+        ($keys.Count -gt 0 -or $ModelSet -ne 'Klein') -and @($keys | Where-Object { $selectedKeys -notcontains $_ }).Count -eq 0
     })
     $nodeNames = @($enabledPresets | ForEach-Object { @($_.customNodePackages) } | Where-Object { $_ } | Sort-Object -Unique)
     $nodes = @($Manifest.customNodes | Where-Object { $nodeNames -contains $_.name })
@@ -882,6 +961,7 @@ function Invoke-Preflight {
     $gpu = @($line -split ',' | ForEach-Object { $_.Trim() })
     if ($gpu.Count -lt 3) { Stop-Install "Unexpected nvidia-smi output: $line" }
     $gpuName = $gpu[0]; $vramMiB = [int]$gpu[1]; $driver = $gpu[2]
+    $script:VramBytes = [double]$vramMiB * 1MB
     Write-Step ('GPU: {0} | VRAM {1:N1} GB | driver {2}' -f $gpuName, ($vramMiB / 1024), $driver)
     if ($gpuName -notmatch 'RTX') { Add-Warning 'The GPU is not an NVIDIA RTX: compatibility and speed are not guaranteed.' }
     if ($vramMiB -lt $script:MinVramMiB) {
@@ -923,6 +1003,7 @@ function Initialize-Context {
     $script:StartScript = Join-Path $script:Root 'Start-ComfyUI.cmd'
     $script:RunStamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
     $script:NeedsRestart = $false
+    $script:VramBytes = 0
     foreach ($p in @($script:Root, $script:Downloads, $script:Logs)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
     $script:LogFile = Join-Path $script:Logs "setup-$($script:RunStamp).log"
     try { Start-Transcript -Path $script:LogFile -ErrorAction Stop | Out-Null } catch { Write-Warning "Transcript unavailable: $_" }
@@ -959,7 +1040,19 @@ function Invoke-Main {
 
         Invoke-Preflight
         $manifest = Get-Manifest
-        $plan = Resolve-InstallPlan $manifest
+        $outlook = Get-PresetOutlook $manifest $script:VramBytes
+        Show-GpuAdvisor $outlook $script:VramBytes
+        $script:Report.advisor = @($outlook | ForEach-Object {
+            [ordered]@{ tool = $_.Tool; preset = $_.Id; name = $_.Name; expectation = $_.Expectation
+                        largestModel = $_.LargestName; largestBytes = $_.LargestBytes; restricted = $_.Restricted; status = $_.Status }
+        })
+        $plan = Resolve-InstallPlan $manifest $outlook
+        if ($ModelSet -eq 'Auto') {
+            $left = @($outlook | Where-Object { -not $_.Restricted -and $_.Expectation -eq 'offloads' })
+            if ($left.Count -gt 0) {
+                Write-Host ("  Auto skips {0} preset(s) too heavy for this GPU ({1}); use -ModelSet Full to install them anyway." -f $left.Count, (($left | ForEach-Object { $_.Name }) -join ', ')) -ForegroundColor DarkGray
+            }
+        }
         $script:Report.manifest = [ordered]@{
             openLayerVersion = $manifest.pluginVersion; generatedAt = $manifest.generatedAt
             selectedModels = $plan.Models.Count; customNodes = @($plan.CustomNodes | ForEach-Object { $_.name })
@@ -1006,7 +1099,7 @@ function Invoke-Main {
                 if ($name -notmatch '\.(safetensors|ckpt)$') { $name = 'sd15-checkpoint.safetensors' }
                 try { Invoke-Download $Sd15CheckpointUrl (Join-Path $script:ComfyDir "models\checkpoints\$name") 0 ''; [void]$script:Report.models.Add([ordered]@{ file = $name; folder = 'checkpoints'; status = 'ok'; verification = 'none' }) }
                 catch { Add-Warning "SD 1.5 checkpoint download failed: $($_.Exception.Message)" }
-            } elseif ($ModelSet -eq 'Full') {
+            } elseif ($ModelSet -ne 'Klein') {
                 Add-Warning 'No SD 1.5 checkpoint: Sketch to Image, SD inpaint and Style Reference stay unavailable. Pass -Sd15CheckpointUrl or copy one into models\checkpoints.'
             }
         }

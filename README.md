@@ -27,7 +27,7 @@ cannot be done automatically.
 | GPU | NVIDIA, 6 GB VRAM | NVIDIA RTX, 8 GB+ VRAM |
 | Driver | recent NVIDIA Studio driver | 580 or newer (CUDA 13.0) |
 | RAM | 16 GB | 32 GB |
-| Disk | ~25 GB (`-ModelSet Klein`) | ~140 GB free (`-ModelSet Full`) |
+| Disk | ~25 GB (`-ModelSet Klein`) | ~140 GB free (`-ModelSet Full` or a 24 GB GPU with `Auto`) |
 | Photoshop | 2024 (v25) or newer, licensed | latest |
 | Creative Cloud desktop app | needed to install the plugin, signed in with any Adobe account (a free one works) | |
 
@@ -62,12 +62,30 @@ Interrupted? Run the same command again: finished files are skipped, partial dow
 | OpenLayer plugin | latest [OpenLayer release](https://github.com/MehranMarxian/OpenLayer/releases) | Adobe UPI `/list all` |
 | End-to-end test | FLUX.2 [klein] 4B, 512×512, 4 steps via the ComfyUI API | valid PNG written |
 
+### GPU advisor
+
+Before downloading anything the script reads your GPU's VRAM and rates every OpenLayer preset,
+grouped by tool, with the same rule OpenLayer's own Setup tab uses (the largest model file of a
+preset against your VRAM):
+
+```
+  Text to Image
+    [OK   ] FLUX.2 Klein                             7.49 GB  RECOMMENDED
+    [TIGHT] Z_image_Turbo                           11.46 GB
+    [SLOW ] Flux1-dev fp8                           16.06 GB  restricted licence
+```
+
+`OK` runs at full speed, `TIGHT` fits but slows down on big canvases, `SLOW` means ComfyUI keeps
+part of the model in system RAM (slower, not broken). The best freely-licensed preset of each tool
+is marked `RECOMMENDED`. The advisor is also saved in the report and shown by `-DryRun`.
+
 ### Model sets
 
-| `-ModelSet` | Models | Download | OpenLayer tools |
+| `-ModelSet` | Models | Download | Use it when |
 | --- | --- | --- | --- |
-| `Full` (default) | every model **without** a restricted licence (31 today) | ~126 GB | all tools whose models are freely licensed |
-| `Klein` | the FLUX.2 [klein] 4B stack only | ~12.5 GB | Text to Image, Image to Image, Edit Image, Inpaint, Multi-Reference |
+| `Auto` (default) | every freely-licensed preset rated `OK` or `TIGHT` for **your** GPU | ~24 GB on 8 GB VRAM, ~64 GB on 16 GB, ~116 GB on 24 GB | you want everything that runs well on your card |
+| `Full` | every model **without** a restricted licence (31 today) | ~126 GB | you want everything, even presets that will offload |
+| `Klein` | the FLUX.2 [klein] 4B stack only | ~12.5 GB | small disk, or a quick start |
 
 Models that OpenLayer marks as licence-restricted (FLUX.1 dev, FLUX.2 dev, Qwen-Image 2.1:
 non-commercial or research-only) are **never downloaded by default**. To include them you must
@@ -89,7 +107,7 @@ plugin instead of a hand-maintained list. See [manifest/SOURCE.md](manifest/SOUR
 | Parameter | Effect |
 | --- | --- |
 | `-Root <path>` | install folder (default `D:\AI\PhotoshopLocalAI`, or `C:\` if there is no D:) |
-| `-ModelSet Full\|Klein` | which models to install (see above) |
+| `-ModelSet Auto\|Full\|Klein` | which models to install (see above) |
 | `-IncludeLicenseRestricted -AcceptLicenses` | also download non-commercial / research-only models |
 | `-Sd15CheckpointUrl <url>` | download an SD 1.5 checkpoint into `models\checkpoints` |
 | `-DryRun` | checks + plan + download size, changes nothing |
