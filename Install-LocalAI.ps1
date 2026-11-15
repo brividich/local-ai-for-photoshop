@@ -459,7 +459,8 @@ function Get-QualityGuide($Outlook, [double]$VramBytes) {
     $picks = @{}
     foreach ($p in (Get-ToolPicks $Outlook)) { $picks[$p.Tool] = $p }
     $vramGB = $VramBytes / 1GB
-    $maxSide = if ($vramGB -ge 16) { 1536 } elseif ($vramGB -ge 12) { 1280 } else { 1024 }
+    # Cards sold as 16 GB report ~15.9 GB, 12 GB cards ~11.9 GB.
+    $maxSide = if ($vramGB -ge 15) { 1536 } elseif ($vramGB -ge 11) { 1280 } else { 1024 }
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add(('Best photo quality on this PC ({0:N0} GB VRAM) - Local AI for Photoshop' -f $vramGB))
     $lines.Add('')
@@ -567,7 +568,8 @@ function Get-ModelMissingBytes($Model) {
     if (Test-Path -LiteralPath "$path.part") { $have = (Get-Item -LiteralPath "$path.part").Length }
     $size = 0
     if ($Model.PSObject.Properties['sizeBytes'] -and $Model.sizeBytes) { $size = [int64]$Model.sizeBytes }
-    return [math]::Max(0, $size - $have)
+    # [int64] on both sides: Windows PowerShell 5.1 would otherwise pick Math.Max(Int32, Int32) and overflow above 2 GB.
+    return [math]::Max([int64]0, [int64]($size - $have))
 }
 
 function Test-ModelPresent($Model) {

@@ -111,6 +111,16 @@ Describe 'Helpers' {
         (ConvertTo-VersionObject 'v0.45.0') | Should -Be ([version]'0.45.0')
         (ConvertTo-VersionObject '0.9.1') -lt (ConvertTo-VersionObject '0.10.0') | Should -BeTrue
     }
+    It 'computes missing bytes for files larger than 2 GB (Int32 overflow on PS 5.1)' {
+        $script:ComfyDir = Join-Path ([IO.Path]::GetTempPath()) ('lafp-' + [guid]::NewGuid())
+        $big = $script:Manifest.models | Where-Object { [int64]$_.sizeBytes -gt 3GB } | Select-Object -First 1
+        Get-ModelMissingBytes $big | Should -Be ([int64]$big.sizeBytes)
+    }
+    It 'suggests 1536 px on a card reporting 15.9 GB' {
+        $IncludeLicenseRestricted = $false
+        $v = 15.9GB
+        ((Get-QualityGuide (Get-PresetOutlook $script:Manifest $v) $v) -join "`n") | Should -Match '1536 px'
+    }
     It 'verifies file integrity and writes a marker' {
         $f = Join-Path ([IO.Path]::GetTempPath()) ("lafp-" + [guid]::NewGuid() + '.bin')
         [IO.File]::WriteAllText($f, 'hello')
