@@ -25,20 +25,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shell: [pwsh, powershell]   # PowerShell 7 and Windows PowerShell 5.1
+        edition: [core, desktop]   # PowerShell 7 and Windows PowerShell 5.1
     steps:
       - uses: actions/checkout@v4
-      - name: Pester (${{ matrix.shell }})
-        shell: ${{ matrix.shell }}
-        run: |
-          if ($PSVersionTable.PSVersion.Major -lt 6) { Install-PackageProvider NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null }
-          Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck
-          Import-Module Pester -MinimumVersion 5.5.0
-          $config = New-PesterConfiguration
-          $config.Run.Path = './tests'
-          $config.Run.Exit = $true
-          $config.Output.Verbosity = 'Detailed'
-          Invoke-Pester -Configuration $config
+      - name: Pester on PowerShell 7
+        if: matrix.edition == 'core'
+        shell: pwsh
+        run: ./tests/Invoke-Tests.ps1
+      - name: Pester on Windows PowerShell 5.1
+        if: matrix.edition == 'desktop'
+        shell: powershell
+        run: ./tests/Invoke-Tests.ps1
 
   manifest:
     runs-on: ubuntu-latest
