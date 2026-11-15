@@ -1,0 +1,9 @@
+# Local runs
+*.log
+last-report.json
+report-*.json
+Downloads/
+Logs/
+ComfyUI_windows_portable/
+*.part
+*.verified

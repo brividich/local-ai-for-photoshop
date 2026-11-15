@@ -1,0 +1,52 @@
+name: Update OpenLayer manifest
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'   # Mondays 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build OpenLayer's setup pack from its latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list -R MehranMarxian/OpenLayer --limit 1 --json tagName -q '.[0].tagName')
+          git clone --depth 1 --branch "$tag" https://github.com/MehranMarxian/OpenLayer.git /tmp/openlayer
+          cd /tmp/openlayer
+          npm ci --no-audit --no-fund --ignore-scripts
+          npm run setup-pack
+          unzip -o -j packages/openlayer-comfyui-setup-*.zip requirements.json -d /tmp/pack
+          cp /tmp/pack/requirements.json "$GITHUB_WORKSPACE/manifest/openlayer-requirements.json"
+          echo "OPENLAYER_TAG=$tag" >> "$GITHUB_ENV"
+          echo "OPENLAYER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Drop timestamp-only changes
+        run: |
+          if git diff --quiet -I '"generatedAt"' -- manifest/openlayer-requirements.json; then
+            git checkout -- manifest/openlayer-requirements.json
+          else
+            version=$(python3 -c "import json;print(json.load(open('manifest/openlayer-requirements.json'))['pluginVersion'])")
+            sed -i "s/^| OpenLayer version | .* |$/| OpenLayer version | $version |/; s/^| OpenLayer commit | .* |$/| OpenLayer commit | \`$OPENLAYER_SHA\` |/" manifest/SOURCE.md
+          fi
+      - uses: peter-evans/create-pull-request@v6
+        with:
+          branch: bot/openlayer-manifest
+          commit-message: "manifest: sync with OpenLayer ${{ env.OPENLAYER_TAG }}"
+          title: "Sync manifest with OpenLayer ${{ env.OPENLAYER_TAG }}"
+          body: |
+            Regenerated `manifest/openlayer-requirements.json` with OpenLayer's own `npm run setup-pack`
+            at tag `${{ env.OPENLAYER_TAG }}` (commit `${{ env.OPENLAYER_SHA }}`).
+
+            Review new models, licence gates and custom node packages before merging.
+          labels: manifest
