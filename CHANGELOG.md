@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0 - 2026-11-15
+
+- Desktop shortcut "Local AI for Photoshop" with its own icon (`assets/`), pointing to the new
+  `Start-LocalAI.cmd` launcher: starts ComfyUI minimised if needed, waits for the API, opens Photoshop.
+- `-CreateShortcut` (also menu option 8) and `-NoShortcut`; uninstall removes the shortcut.
+
 ## 0.10.0 - 2026-11-15
 
 - Interactive menu when run without action parameters: recommended / full / klein / custom install,

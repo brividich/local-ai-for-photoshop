@@ -37,8 +37,9 @@ usare. Ogni passaggio è verificato, riprendibile e si chiude con una generazion
    adatti sono già selezionati), anteprima, pulizia o disinstallazione. Prima di scaricare, di
    riavviare ComfyUI o di installare Creative Cloud lo script chiede conferma.
 
-4. Riavvia Photoshop e apri **Plugin > OpenLayer**. ComfyUI deve essere in esecuzione: lo avvii
-   quando vuoi con `Start-ComfyUI.cmd` nella cartella di installazione.
+4. Doppio clic su **Local AI for Photoshop** sul desktop: avvia ComfyUI (ridotto a icona) se non è
+   già attivo, aspetta che risponda e apre Photoshop. Poi **Plugin > OpenLayer**.
+   Per ricreare solo il collegamento: `-CreateShortcut`.
 
 Si è interrotto? Rilancia lo stesso comando: i file completi vengono saltati, i download parziali ripresi.
 

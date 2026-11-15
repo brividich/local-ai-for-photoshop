@@ -58,8 +58,9 @@ cannot be done automatically.
    preselected and you toggle the others by number. The script asks before downloading, before
    restarting ComfyUI and before installing Creative Cloud.
 
-4. Restart Photoshop and open **Plugins > OpenLayer**. ComfyUI must be running: start it any
-   time with `Start-ComfyUI.cmd` in the install folder.
+4. Double-click **Local AI for Photoshop** on the desktop: it starts ComfyUI (minimised) if it is
+   not already running, waits until it answers, then opens Photoshop. Open **Plugins > OpenLayer**.
+   (`Start-ComfyUI.cmd` in the install folder starts only ComfyUI.)
 
 Interrupted? Run the same command again: finished files are skipped, partial downloads resume.
 
@@ -142,6 +143,7 @@ plugin instead of a hand-maintained list. See [manifest/SOURCE.md](manifest/SOUR
 | `-Presets id1,id2` | install exactly these OpenLayer presets (implies `-ModelSet Custom`) |
 | `-DryRun` | checks + plan + download size, changes nothing |
 | `-Cleanup` | remove download cache, partial downloads, old logs, test images, leftovers |
+| `-CreateShortcut` / `-NoShortcut` | only (re)create the desktop shortcut / skip it during install |
 | `-Uninstall` | remove the plugin, stop ComfyUI, delete the install folder (type `UNINSTALL`, or `-Yes`) |
 | `-Yes` / `-NonInteractive` | answer yes to every question / never ask (no menu) |
 | `-UpdateComfyUI` | update an existing ComfyUI with the official portable updater |

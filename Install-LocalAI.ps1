@@ -45,6 +45,10 @@
 .PARAMETER Uninstall
   Remove the OpenLayer plugin, stop ComfyUI and delete the install folder (asks to type UNINSTALL;
   without a console it needs -Yes).
+.PARAMETER CreateShortcut
+  Only (re)create Start-LocalAI.cmd and the "Local AI for Photoshop" desktop shortcut, then stop.
+.PARAMETER NoShortcut
+  Do not create the desktop shortcut during installation.
 .PARAMETER Yes
   Answer yes to every confirmation (unattended runs).
 .PARAMETER NonInteractive
@@ -94,6 +98,8 @@ param(
     [switch]$DryRun,
     [switch]$Cleanup,
     [switch]$Uninstall,
+    [switch]$CreateShortcut,
+    [switch]$NoShortcut,
     [switch]$Yes,
     [switch]$NonInteractive,
     [ValidateRange(60, 7200)][int]$TestTimeoutSec = 900
@@ -110,7 +116,7 @@ $script:Interactive = $false
 # =============================================================================================
 # Constants
 # =============================================================================================
-$script:InstallerVersion = '0.10.0'
+$script:InstallerVersion = '0.11.0'
 $script:ProjectRepo      = 'brividich/local-ai-for-photoshop'
 $script:ManifestRawUrl   = "https://raw.githubusercontent.com/$($script:ProjectRepo)/main/manifest/openlayer-requirements.json"
 $script:ComfyRepo        = 'Comfy-Org/ComfyUI'
@@ -127,6 +133,8 @@ $script:MinPsMajor       = 25      # Photoshop 2024 = 25.x (OpenLayer manifest m
 $script:MinComfyVersion  = '0.9.1' # version the official FLUX.2 klein template was saved with
 $script:UpiPath          = Join-Path ([string]${env:CommonProgramFiles} + '\') 'Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe'
 $script:UserAgent        = "local-ai-for-photoshop/$($script:InstallerVersion)"
+$script:IconRawUrl       = "https://raw.githubusercontent.com/$($script:ProjectRepo)/main/assets/local-ai-for-photoshop.ico"
+$script:ShortcutName     = 'Local AI for Photoshop.lnk'
 
 # =============================================================================================
 # Logging and report
@@ -893,6 +901,71 @@ pause
     Write-Step "Start script: $($script:StartScript)"
 }
 
+# One-click launcher: starts ComfyUI minimised if it is not already answering, waits until the API
+# is up, then opens the newest Photoshop. Safe to double-click when ComfyUI is already running.
+function Write-LauncherScript {
+    $content = @"
+@echo off
+setlocal
+title Local AI for Photoshop
+set "ROOT=%~dp0"
+set "API=http://127.0.0.1:$Port/system_stats"
+curl.exe -s -f -o nul "%API%" && goto ready
+echo Starting ComfyUI (local AI engine)...
+start "ComfyUI - Local AI for Photoshop" /min cmd /c ""%ROOT%Start-ComfyUI.cmd""
+for /l %%i in (1,1,120) do (
+  timeout /t 2 /nobreak >nul
+  curl.exe -s -f -o nul "%API%" && goto ready
+)
+echo ComfyUI did not start within 4 minutes. Open the minimised ComfyUI window to see why.
+pause
+exit /b 1
+:ready
+echo ComfyUI is ready on port $Port.
+set "PS="
+for /d %%d in ("%ProgramFiles%\Adobe\Adobe Photoshop*") do if exist "%%d\Photoshop.exe" set "PS=%%d\Photoshop.exe"
+tasklist /fi "imagename eq Photoshop.exe" | find /i "Photoshop.exe" >nul && goto end
+if defined PS start "" "%PS%"
+:end
+echo In Photoshop: Plugins ^> OpenLayer. Keep the ComfyUI window open while you work.
+timeout /t 5 >nul
+exit /b 0
+"@
+    Set-Content -Path $script:LauncherScript -Value $content -Encoding ASCII
+    Write-Step "Launcher: $($script:LauncherScript)"
+}
+
+function Get-DesktopShortcutPath {
+    # GetFolderPath follows OneDrive / folder redirection.
+    return (Join-Path ([Environment]::GetFolderPath('Desktop')) $script:ShortcutName)
+}
+
+function Install-DesktopShortcut {
+    Write-LauncherScript
+    $icon = Join-Path $script:Root 'local-ai-for-photoshop.ico'
+    $bundled = ''
+    if ($PSScriptRoot) { $bundled = Join-Path $PSScriptRoot 'assets\local-ai-for-photoshop.ico' }
+    try {
+        if ($bundled -and (Test-Path -LiteralPath $bundled)) { Copy-Item -LiteralPath $bundled -Destination $icon -Force }
+        elseif (-not (Test-Path -LiteralPath $icon)) {
+            Invoke-WebRequest -Uri $script:IconRawUrl -OutFile $icon -UseBasicParsing -Headers (Get-RequestHeaders $script:IconRawUrl) | Out-Null
+        }
+    } catch { Add-Warning "Icon not available ($($_.Exception.Message)): the shortcut will use the default icon."; $icon = '' }
+    $lnk = Get-DesktopShortcutPath
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $sc = $shell.CreateShortcut($lnk)
+        $sc.TargetPath = $script:LauncherScript
+        $sc.WorkingDirectory = $script:Root
+        $sc.Description = 'Start the local AI (ComfyUI) and Photoshop with OpenLayer'
+        $sc.WindowStyle = 1   # normal: shows progress, closes by itself when Photoshop starts
+        if ($icon) { $sc.IconLocation = "$icon,0" }
+        $sc.Save()
+        Write-Ok "Desktop shortcut: $lnk"
+        $script:Report.shortcut = $lnk
+    } catch { Add-Warning "Could not create the desktop shortcut: $($_.Exception.Message)" }
+}
+
 function Start-ComfyUI {
     $running = Test-ComfyApi
     if ($running -and $script:NeedsRestart) {
@@ -1251,8 +1324,9 @@ function Show-MainMenu($Manifest, $Outlook) {
     Write-Host '   5) Preview the recommended plan (dry run, changes nothing)'
     Write-Host '   6) Clean up (download cache, partial files, old logs, unused models)'
     Write-Host '   7) Uninstall'
+    Write-Host '   8) Create the desktop shortcut'
     Write-Host '   0) Exit'
-    switch (Read-Choice 'Choice' @('1', '2', '3', '4', '5', '6', '7', '0')) {
+    switch (Read-Choice 'Choice' @('1', '2', '3', '4', '5', '6', '7', '8', '0')) {
         '1' { return @{ Action = 'install'; Set = 'Auto' } }
         '2' { return @{ Action = 'install'; Set = 'Full' } }
         '3' { return @{ Action = 'install'; Set = 'Klein' } }
@@ -1260,6 +1334,7 @@ function Show-MainMenu($Manifest, $Outlook) {
         '5' { return @{ Action = 'dryrun'; Set = 'Auto' } }
         '6' { return @{ Action = 'cleanup'; Set = $ModelSet } }
         '7' { return @{ Action = 'uninstall'; Set = $ModelSet } }
+        '8' { return @{ Action = 'shortcut'; Set = $ModelSet } }
         default { return @{ Action = 'exit'; Set = $ModelSet } }
     }
 }
@@ -1380,6 +1455,7 @@ function Invoke-Uninstall {
     $size = Get-PathBytes $script:Root
     Write-Host '  This will:' -ForegroundColor Yellow
     if ($pluginInstalled) { Write-Host '   - remove the OpenLayer plugin from Photoshop' -ForegroundColor Yellow }
+    Write-Host '   - remove the desktop shortcut' -ForegroundColor Yellow
     Write-Host '   - stop ComfyUI if it is running from this folder' -ForegroundColor Yellow
     Write-Host ("   - delete {0} ({1}: ComfyUI, models, logs)" -f $script:Root, (Format-Size $size)) -ForegroundColor Yellow
     Write-Host '  7-Zip, Git and Creative Cloud are left installed.' -ForegroundColor DarkGray
@@ -1393,6 +1469,8 @@ function Invoke-Uninstall {
         [void](Invoke-Native $script:UpiPath @('/remove', 'OpenLayer'))
         if (Test-OpenLayerInstalled) { Add-Warning 'OpenLayer is still listed: remove it from Creative Cloud > Plugins.' } else { Write-Ok 'OpenLayer removed.' }
     }
+    $lnk = Get-DesktopShortcutPath
+    if (Test-Path -LiteralPath $lnk) { Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue; Write-Ok 'Desktop shortcut removed.' }
     $proc = Get-ComfyProcess
     if ($proc) { Write-Step "Stopping ComfyUI (PID $($proc.Id))."; Stop-Process -Id $proc.Id -Force; Start-Sleep -Seconds 2 }
     # The transcript and the report live inside the folder being deleted.
@@ -1421,6 +1499,7 @@ function Initialize-Context {
     $script:ComfyDir    = Join-Path $script:InstallDir 'ComfyUI'
     $script:Python      = Join-Path $script:InstallDir 'python_embeded\python.exe'
     $script:StartScript = Join-Path $script:Root 'Start-ComfyUI.cmd'
+    $script:LauncherScript = Join-Path $script:Root 'Start-LocalAI.cmd'
     $script:RunStamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
     $script:NeedsRestart = $false
     $script:VramBytes = 0
@@ -1484,13 +1563,14 @@ function Invoke-Main {
             [ordered]@{ tool = $_.Tool; fast = $(if ($_.Fast) { $_.Fast.Id } else { $null }); quality = $(if ($_.Quality) { $_.Quality.Id } else { $null }) }
         })
         # ---------------------------------------------------------------- what to do
-        $actionKeys = @('ModelSet', 'Presets', 'DryRun', 'Cleanup', 'Uninstall')
+        $actionKeys = @('ModelSet', 'Presets', 'DryRun', 'Cleanup', 'Uninstall', 'CreateShortcut')
         $hasActionParam = (@($script:BoundKeys | Where-Object { $actionKeys -contains $_ }).Count -gt 0)
         $action = 'install'
         $set = $ModelSet
         if (@($Presets).Count -gt 0) { $set = 'Custom'; $script:CustomPresetIds = @($Presets) }
         if ($DryRun) { $action = 'dryrun' }
         if ($Cleanup) { $action = 'cleanup' }
+        if ($CreateShortcut) { $action = 'shortcut' }
         if ($script:Interactive -and -not $hasActionParam) {
             $choice = Show-MainMenu $manifest $outlook
             $action = $choice.Action
@@ -1507,6 +1587,11 @@ function Invoke-Main {
             'exit'      { $script:Report.status = 'cancelled'; $script:Report.test.status = 'skipped'; $exitCode = 0; return $exitCode }
             'cleanup'   { Invoke-Cleanup $manifest $outlook; if ($script:Report) { $script:Report.status = 'cleanup'; $script:Report.test.status = 'skipped' }; $exitCode = 0; return $exitCode }
             'uninstall' { Invoke-Uninstall; $exitCode = 0; return $exitCode }
+            'shortcut'  {
+                if (-not (Test-Path $script:StartScript)) { Write-StartScript }
+                Install-DesktopShortcut
+                $script:Report.status = 'shortcut'; $script:Report.test.status = 'skipped'; $exitCode = 0; return $exitCode
+            }
             'dryrun'    { $script:DryRunMode = $true }
         }
         if ($set -eq 'Custom') {
@@ -1589,6 +1674,9 @@ function Invoke-Main {
         }
         if (-not $SkipCustomNodes) { foreach ($n in $plan.CustomNodes) { Install-CustomNode $n } }
         Write-StartScript
+        if (-not $NoShortcut) {
+            if ((Test-Path -LiteralPath (Get-DesktopShortcutPath)) -or (Read-YesNo 'Create a desktop shortcut that starts ComfyUI and Photoshop?' $true)) { Install-DesktopShortcut }
+        }
         if (-not $SkipPlugin) { Install-OpenLayer } else { $script:Report.plugin.status = 'skipped' }
 
         $ready = Start-ComfyUI
