@@ -79,6 +79,21 @@ Describe 'GPU advisor' {
         $big.Models.Count | Should -BeGreaterThan $small.Models.Count
         @($big.Models | Where-Object { Test-ModelRestricted $_ }).Count | Should -Be 0
     }
+    It 'picks a heavier, better preset for quality than for speed on 16 GB' {
+        $IncludeLicenseRestricted = $false
+        $picks = Get-ToolPicks (Get-PresetOutlook $script:Manifest (16GB))
+        $t2i = $picks | Where-Object Tool -eq 'Text to Image'
+        $t2i.Fast.Id | Should -Be 'txt2img-flux2-klein'
+        (Get-QualityScore $t2i.Quality.Id) | Should -BeGreaterThan (Get-QualityScore $t2i.Fast.Id)
+        $t2i.Quality.Restricted | Should -BeFalse
+        ($picks | Where-Object Tool -eq 'Upscale').Quality.Id | Should -Be 'upscale-seedvr2-3b'
+    }
+    It 'writes a quality guide that names the upscaler' {
+        $IncludeLicenseRestricted = $false
+        $guide = Get-QualityGuide (Get-PresetOutlook $script:Manifest (16GB)) (16GB)
+        ($guide -join "`n") | Should -Match 'SeedVR2'
+        ($guide -join "`n") | Should -Match '1536 px'
+    }
     It 'Auto refuses to run without a VRAM figure' {
         $ModelSet = 'Auto'
         { Resolve-InstallPlan $script:Manifest $null } | Should -Throw '*VRAM*'

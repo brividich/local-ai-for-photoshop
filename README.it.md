@@ -53,8 +53,19 @@ di modello più grande del preset confrontato con la VRAM):
 - `TIGHT`: ci sta, ma rallenta con tele grandi
 - `SLOW`: ComfyUI tiene parte del modello in RAM (più lento, non rotto)
 
-Per ogni strumento il miglior preset a licenza libera è segnato `RECOMMENDED`. La tabella compare
-anche con `-DryRun` e finisce nel report.
+Per ogni strumento segna due scelte:
+
+- **FAST PICK**: il preset più leggero a piena velocità, per le bozze;
+- **QUALITY PICK**: la migliore qualità fotografica che ci sta nella tua VRAM (su 16 GB, per esempio,
+  Z_image_Turbo per Text to Image e SeedVR2 per l'Upscale). Se coincidono compare `RECOMMENDED`.
+
+I preset a licenza restrittiva vengono scelti solo con `-IncludeLicenseRestricted`. La classifica di
+qualità è editoriale (famiglie di modelli, non un benchmark) ed è in `$script:QualityScore`.
+
+Alla fine lo script stampa e salva in `Quality-Guide.txt` una guida su misura per la tua GPU: con
+quale preset generare, la risoluzione massima sensata, come scrivere prompt fotografici, l'upscaler
+che ricostruisce i dettagli, i preset per rifinire e quali modelli migliori esistono ma richiedono
+più VRAM o una licenza non commerciale.
 
 ## Set di modelli
 

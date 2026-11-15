@@ -383,26 +383,134 @@ function Get-PresetOutlook($Manifest, [double]$VramBytes) {
     return , @($result | Sort-Object Tool, @{ Expression = { $script:OutlookRank[$_.Expectation] } }, LargestBytes, Id)
 }
 
+# Editorial photo-quality score per OpenLayer preset (5 = best). Not measured by OpenLayer:
+# it reflects the model families (FLUX.2 dev / Qwen-Image > Z-Image / Krea-2 / FLUX.1 dev >
+# FLUX.2 klein 4B distilled > SD 1.5) and is only used to pick the "QUALITY" preset per tool.
+# Presets not listed score 3. Contributions welcome.
+$script:QualityScore = @{
+    'txt2img-flux2-dev-gguf' = 5; 'txt2img-qwen-image-21' = 5; 'txt2img-flux1-dev-fp8' = 4
+    'txt2img-z-image-turbo' = 4; 'txt2img-krea2-turbo' = 4; 'txt2img-flux2-klein' = 3; 'txt2img-basic' = 2
+    'edit-qwen-image-21' = 5; 'img2img-z-image-turbo' = 4; 'img2img-krea2-turbo' = 4
+    'edit-flux2-klein' = 3; 'img2img-flux2-klein' = 3; 'img2img-basic' = 2
+    'inpaint-flux-fill-cropstitch' = 5; 'inpaint-flux-fill-basic' = 4; 'inpaint-flux2-klein' = 3
+    'inpaint-lama-klein' = 3; 'inpaint-lama' = 2; 'inpaint-basic' = 2
+    'upscale-seedvr2-3b' = 5; 'upscale-basic' = 3
+    'multi-reference-qwen-image-21' = 5; 'multi-reference-flux2-klein' = 3
+    'sketch2img-zimage-fun-controlnet-full' = 5; 'sketch2img-zimage-fun-controlnet' = 4
+    'sketch2img-linecn-basic' = 2; 'sketch2img-scribble-basic' = 2; 'sketch2img-depth-basic' = 2
+}
+
+# Presets whose only listed models are SD 1.5 add-ons: they also need a checkpoint of your choice.
+$script:NeedsSd15Checkpoint = @('sketch2img-linecn-basic', 'sketch2img-scribble-basic', 'sketch2img-depth-basic', 'style-reference-sd15')
+
+function Get-QualityScore([string]$PresetId) {
+    if ($script:QualityScore.ContainsKey($PresetId)) { return $script:QualityScore[$PresetId] }
+    return 3
+}
+
+# Per tool: FAST = lightest preset that runs at full speed; QUALITY = best-scoring preset that
+# still fits in VRAM (OK or TIGHT). Restricted-licence presets only with -IncludeLicenseRestricted.
+function Get-ToolPicks($Outlook) {
+    $fits = @('comfortable', 'tight')
+    $picks = foreach ($group in ($Outlook | Group-Object Tool)) {
+        $usable = @($group.Group | Where-Object { $IncludeLicenseRestricted -or -not $_.Restricted })
+        $fast = @($usable | Where-Object { $_.Expectation -eq 'comfortable' }) | Select-Object -First 1
+        if (-not $fast) { $fast = @($usable | Where-Object { $_.Expectation -eq 'tight' }) | Select-Object -First 1 }
+        $quality = @($usable | Where-Object { $fits -contains $_.Expectation } |
+            Sort-Object @{ Expression = { Get-QualityScore $_.Id }; Descending = $true }, @{ Expression = { $script:OutlookRank[$_.Expectation] } }, LargestBytes) | Select-Object -First 1
+        $ceiling = @($group.Group | Where-Object { $_.Expectation -ne 'nomodel' } |
+            Sort-Object @{ Expression = { Get-QualityScore $_.Id }; Descending = $true }, LargestBytes) | Select-Object -First 1
+        [pscustomobject]@{ Tool = $group.Name; Fast = $fast; Quality = $quality; Ceiling = $ceiling }
+    }
+    return , @($picks)
+}
+
 function Show-GpuAdvisor($Outlook, [double]$VramBytes) {
     Write-Host ''
     Write-Step ('GPU advisor for {0:N1} GB of VRAM (OpenLayer presets, largest model vs VRAM)' -f ($VramBytes / 1GB))
     $marks = @{ 'comfortable' = 'OK   '; 'tight' = 'TIGHT'; 'offloads' = 'SLOW '; 'unknown' = '?    '; 'nomodel' = '-    ' }
     $colors = @{ 'comfortable' = 'Green'; 'tight' = 'Yellow'; 'offloads' = 'DarkYellow'; 'unknown' = 'Gray'; 'nomodel' = 'Gray' }
+    $picks = @{}
+    foreach ($p in (Get-ToolPicks $Outlook)) { $picks[$p.Tool] = $p }
     foreach ($group in ($Outlook | Group-Object Tool)) {
-        $best = @($group.Group | Where-Object { -not $_.Restricted -and $_.Expectation -eq 'comfortable' }) | Select-Object -First 1
-        if (-not $best) { $best = @($group.Group | Where-Object { -not $_.Restricted -and $_.Expectation -eq 'tight' }) | Select-Object -First 1 }
+        $pick = $picks[$group.Name]
         Write-Host ("  {0}" -f $group.Name) -ForegroundColor White
         foreach ($o in $group.Group) {
             $flags = @()
-            if ($best -and $o.Id -eq $best.Id) { $flags += 'RECOMMENDED' }
+            $isFast = ($pick.Fast -and $o.Id -eq $pick.Fast.Id)
+            $isQuality = ($pick.Quality -and $o.Id -eq $pick.Quality.Id)
+            if ($isFast -and $isQuality) { $flags += 'RECOMMENDED' }
+            elseif ($isFast) { $flags += 'FAST PICK' }
+            elseif ($isQuality) { $flags += 'QUALITY PICK' }
             if ($o.Restricted) { $flags += 'restricted licence' }
             if ($o.Status -eq 'experimental') { $flags += 'experimental' }
             $size = if ($o.LargestBytes -gt 0) { Format-Size $o.LargestBytes } else { '-' }
-            Write-Host ('    [{0}] {1,-38} {2,9}  {3}' -f $marks[$o.Expectation], $o.Name, $size, ($flags -join ', ')) -ForegroundColor $colors[$o.Expectation]
+            Write-Host ('    [{0}] {1,-46} {2,9}  {3}' -f $marks[$o.Expectation], $o.Name, $size, ($flags -join ', ')) -ForegroundColor $colors[$o.Expectation]
         }
     }
-    Write-Host '  OK = full speed | TIGHT = fits, slower on big canvases | SLOW = ComfyUI offloads to RAM | ? = size not published | - = no listed model (your own checkpoint, or the node fetches it)' -ForegroundColor DarkGray
+    Write-Host '  OK = full speed | TIGHT = fits, slower on big canvases | SLOW = ComfyUI offloads to RAM | ? = size not published | - = no listed model' -ForegroundColor DarkGray
+    Write-Host '  FAST PICK = lightest preset at full speed | QUALITY PICK = best photo quality that still fits your VRAM' -ForegroundColor DarkGray
     Write-Host ''
+}
+
+# Tailored "best photo quality" workflow for this GPU, printed at the end and saved as
+# Quality-Guide.txt in the install folder.
+function Get-QualityGuide($Outlook, [double]$VramBytes) {
+    $picks = @{}
+    foreach ($p in (Get-ToolPicks $Outlook)) { $picks[$p.Tool] = $p }
+    $vramGB = $VramBytes / 1GB
+    $maxSide = if ($vramGB -ge 16) { 1536 } elseif ($vramGB -ge 12) { 1280 } else { 1024 }
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add(('Best photo quality on this PC ({0:N0} GB VRAM) - Local AI for Photoshop' -f $vramGB))
+    $lines.Add('')
+    $order = @('Text to Image', 'Image to Image', 'Inpaint', 'Upscale', 'Sketch to Image', 'Multi-Reference')
+    $step = 1
+    $t2i = $picks['Text to Image']
+    if ($t2i -and $t2i.Quality) {
+        if ($t2i.Fast -and $t2i.Fast.Id -ne $t2i.Quality.Id) {
+            $lines.Add(("{0}. Generate with '{1}' (Text to Image). Draft fast with '{2}', then switch for the final image." -f $step, $t2i.Quality.Name, $t2i.Fast.Name))
+        } else {
+            $lines.Add(("{0}. Generate with '{1}' (Text to Image): on this GPU it is both the fastest and the best fit." -f $step, $t2i.Quality.Name))
+        }
+        $step++
+    }
+    $lines.Add(("{0}. Generate at the final size, up to about {1} px on the long side (multiples of 64), not at 512 px." -f $step, $maxSide)); $step++
+    $lines.Add(("{0}. Write the prompt in English, like a photographer: subject, lens and focal length, light, time of day," -f $step))
+    $lines.Add('   e.g. "35mm, f/1.8, shallow depth of field, soft window light, natural skin texture, film grain".'); $step++
+    $up = $picks['Upscale']
+    if ($up -and $up.Quality) {
+        $lines.Add(("{0}. Finish with Upscale > '{1}': it rebuilds texture and detail instead of just enlarging." -f $step, $up.Quality.Name)); $step++
+    }
+    $i2i = $picks['Image to Image']
+    if ($i2i -and $i2i.Quality) {
+        $lines.Add(("{0}. Polish a whole image with Image to Image > '{1}' at denoise 0.30-0.40." -f $step, $i2i.Quality.Name)); $step++
+    }
+    $inp = $picks['Inpaint']
+    if ($inp -and $inp.Quality) {
+        $lines.Add(("{0}. Fix hands, faces or objects with Inpaint > '{1}' on a selection only." -f $step, $inp.Quality.Name)); $step++
+    }
+    $lines.Add(("{0}. Try 3-4 seeds of the same prompt before changing the prompt." -f $step))
+    $lines.Add('')
+    $lines.Add('Quality pick per tool (fits your VRAM):')
+    foreach ($tool in $order) {
+        $p = $picks[$tool]
+        if (-not $p -or -not $p.Quality) { continue }
+        $note = ''
+        if ($p.Ceiling -and $p.Ceiling.Id -ne $p.Quality.Id -and (Get-QualityScore $p.Ceiling.Id) -gt (Get-QualityScore $p.Quality.Id)) {
+            $why = @()
+            if ($p.Ceiling.Restricted -and -not $IncludeLicenseRestricted) { $why += 'restricted licence' }
+            if ($p.Ceiling.Expectation -eq 'offloads') { $why += 'too big for your VRAM, slow' }
+            if ($why.Count -gt 0) { $note = " (higher ceiling: '$($p.Ceiling.Name)' - $($why -join ', '))" }
+        }
+        if ($script:NeedsSd15Checkpoint -contains $p.Quality.Id) { $note = " (needs an SD 1.5 checkpoint in models\checkpoints)$note" }
+        $lines.Add(("  - {0,-16} {1}{2}" -f $tool, $p.Quality.Name, $note))
+    }
+    if (-not $IncludeLicenseRestricted) {
+        $lines.Add('')
+        $lines.Add('Personal, non-commercial use only? -IncludeLicenseRestricted -AcceptLicenses adds Qwen-Image 2.1')
+        $lines.Add('(research licence) and FLUX dev (non-commercial): read their licences first.')
+    }
+    return , @($lines)
 }
 
 # Picks the models and custom node packages for the chosen model set.
@@ -1004,6 +1112,7 @@ function Initialize-Context {
     $script:RunStamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
     $script:NeedsRestart = $false
     $script:VramBytes = 0
+    $script:QualityGuide = $null
     foreach ($p in @($script:Root, $script:Downloads, $script:Logs)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
     $script:LogFile = Join-Path $script:Logs "setup-$($script:RunStamp).log"
     try { Start-Transcript -Path $script:LogFile -ErrorAction Stop | Out-Null } catch { Write-Warning "Transcript unavailable: $_" }
@@ -1027,6 +1136,15 @@ function Write-Summary {
     Write-Step ('Warnings     : {0}' -f $r.warnings.Count)
     Write-Step ('Result       : {0}' -f $r.status.ToUpperInvariant())
     if ($r.status -eq 'ok') { Write-Ok 'Open Photoshop > Plugins > OpenLayer.' }
+    if ($script:QualityGuide) {
+        Write-Host ''
+        $script:QualityGuide | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+        try {
+            $guideFile = Join-Path $script:Root 'Quality-Guide.txt'
+            [System.IO.File]::WriteAllLines($guideFile, [string[]]$script:QualityGuide, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Step "Quality guide saved: $guideFile"
+        } catch { Write-Warning "Could not write Quality-Guide.txt: $_" }
+    }
     Write-Step "Report: $(Join-Path $script:Root 'last-report.json')"
     Write-Step "Log: $($script:LogFile)"
 }
@@ -1045,6 +1163,10 @@ function Invoke-Main {
         $script:Report.advisor = @($outlook | ForEach-Object {
             [ordered]@{ tool = $_.Tool; preset = $_.Id; name = $_.Name; expectation = $_.Expectation
                         largestModel = $_.LargestName; largestBytes = $_.LargestBytes; restricted = $_.Restricted; status = $_.Status }
+        })
+        $script:QualityGuide = Get-QualityGuide $outlook $script:VramBytes
+        $script:Report.qualityPicks = @(Get-ToolPicks $outlook | ForEach-Object {
+            [ordered]@{ tool = $_.Tool; fast = $(if ($_.Fast) { $_.Fast.Id } else { $null }); quality = $(if ($_.Quality) { $_.Quality.Id } else { $null }) }
         })
         $plan = Resolve-InstallPlan $manifest $outlook
         if ($ModelSet -eq 'Auto') {

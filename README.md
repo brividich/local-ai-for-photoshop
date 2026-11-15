@@ -76,8 +76,22 @@ preset against your VRAM):
 ```
 
 `OK` runs at full speed, `TIGHT` fits but slows down on big canvases, `SLOW` means ComfyUI keeps
-part of the model in system RAM (slower, not broken). The best freely-licensed preset of each tool
-is marked `RECOMMENDED`. The advisor is also saved in the report and shown by `-DryRun`.
+part of the model in system RAM (slower, not broken). For each tool it marks two picks:
+
+- **FAST PICK**: the lightest preset that runs at full speed (good for drafts);
+- **QUALITY PICK**: the best photo quality that still fits your VRAM (e.g. Z_image_Turbo for Text
+  to Image and SeedVR2 for Upscale on a 16 GB card). When both are the same it says `RECOMMENDED`.
+
+Restricted-licence presets are only picked with `-IncludeLicenseRestricted`. The quality ranking is
+editorial (model families, not a benchmark) and lives in `$script:QualityScore` in the script.
+
+### Quality guide
+
+At the end the script prints, and saves as `Quality-Guide.txt` in the install folder, a short
+workflow tailored to your GPU: which preset to generate with, the largest sensible resolution,
+how to write photographic prompts, the upscaler that rebuilds detail, the Image to Image / Inpaint
+presets for polishing, and which higher-quality models exist but need more VRAM or a
+non-commercial licence.
 
 ### Model sets
 

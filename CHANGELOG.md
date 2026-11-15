@@ -7,7 +7,8 @@ First public release (beta).
 - Manifest-driven installer: models, folders, sizes, SHA256 and custom nodes come from
   OpenLayer's own generated `requirements.json`.
 - GPU advisor: rates every OpenLayer preset OK / TIGHT / SLOW for the detected VRAM (same rule as
-  OpenLayer's Setup outlook) and marks the recommended preset of each tool.
+  OpenLayer's Setup outlook) and marks a FAST PICK and a QUALITY PICK for each tool.
+- Quality guide tailored to the GPU, printed at the end and saved as `Quality-Guide.txt`.
 - `-ModelSet Auto` (default: every freely-licensed preset that fits the GPU), `Full` (all
   freely-licensed models) and `Klein` (FLUX.2 [klein] 4B only).
 - Licence-restricted models only with `-IncludeLicenseRestricted -AcceptLicenses`.
